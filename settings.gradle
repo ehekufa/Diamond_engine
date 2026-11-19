@@ -1,0 +1,37 @@
+// =============================================================================
+//  Diamond Engine — settings
+// =============================================================================
+pluginManagement {
+    // AGP is pinned here so that the CI fallback can downgrade it with
+    //   ./gradlew assembleDebug -Pdiamond.agp.version=8.13.2
+    def agpVersion = providers.gradleProperty('diamond.agp.version')
+            .getOrElse(providers.gradleProperty('diamondAgpVersion').getOrElse('9.0.1'))
+
+    plugins {
+        id 'com.android.application' version agpVersion
+    }
+
+    repositories {
+        google {
+            content {
+                includeGroupByRegex 'com\\.android.*'
+                includeGroupByRegex 'com\\.google.*'
+                includeGroupByRegex 'androidx.*'
+            }
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    // Fail fast instead of silently picking a stray repository.
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = 'DiamondEngine'
+include ':app'

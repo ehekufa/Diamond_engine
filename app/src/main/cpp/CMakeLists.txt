@@ -1,0 +1,279 @@
+# =============================================================================
+#  Diamond Engine — native core (libengine.so)
+# =============================================================================
+#  Language split
+#    * C99   — engine ABI, math helpers, scene storage, deflate, logging,
+#              block-logic execution, LuaC host glue (all `extern "C"`).
+#    * C++23 — OBJ parser, .diamond serializer, render backends, JNI bridge.
+#
+#  Weight policy
+#    * -Os everywhere, -fno-exceptions -fno-rtti for C++ (no unwind tables,
+#      no typeinfo in the .so), -fvisibility=hidden + explicit C exports.
+#    * No libc++ streams, no <iostream>, no <regex>, no <filesystem>.
+#
+#  Options (all overridable with -D… from app/build.gradle):
+#    DIAMOND_USE_LUAC      1 = vendored LuaC under third_party/luac is compiled
+#    DIAMOND_HAVE_LUAC     defined by this file when LuaC sources exist
+#    DIAMOND_SPV_PRESET    SPIR-V shaders were precompiled in CI
+#    DIAMOND_ENABLE_VULKAN 1 = build the Vulkan backend
+#    DIAMOND_STRICT        treat warnings as errors (CI style check)
+# =============================================================================
+cmake_minimum_required(VERSION 3.22.1)
+
+project(DiamondEngine
+        VERSION 0.1.0
+        DESCRIPTION "Ultra-light 2D/2.5D/3D engine + scene editor for Android"
+        LANGUAGES C CXX)
+
+# -----------------------------------------------------------------------------
+#  Options
+# -----------------------------------------------------------------------------
+option(DIAMOND_USE_LUAC     "Compile the vendored LuaC (nightly branch)" ON)
+option(DIAMOND_ENABLE_VULKAN "Build the experimental Vulkan backend" ON)
+option(DIAMOND_STRICT       "Warnings are errors" OFF)
+
+set(DIAMOND_SPV_PRESET "${DIAMOND_SPV_PRESET}" CACHE STRING "SPIR-V shaders precompiled in CI (0/1)")
+
+if(NOT DEFINED DIAMOND_LUAC_REF)
+    set(DIAMOND_LUAC_REF "arena/b210b158-luac")
+endif()
+
+set(CMAKE_C_STANDARD 99)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS ON)
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+set(DIAMOND_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
+set(DIAMOND_LUAC_DIR "${DIAMOND_ROOT}/third_party/luac")
+
+message(STATUS "Diamond: NDK ${ANDROID_NDK_RELEASE} / ABI ${ANDROID_ABI} / API ${ANDROID_PLATFORM_LEVEL}")
+message(STATUS "Diamond: LuaC ref '${DIAMOND_LUAC_REF}' requested, use_luac=${DIAMOND_USE_LUAC}")
+
+# -----------------------------------------------------------------------------
+#  LuaC discovery — the sources are cloned by CI into third_party/luac.
+#  When they are missing (or their layout changes in a future nightly) the
+#  engine still builds: blocks logic then runs on the built-in native executor
+#  and the UI states clearly that scripting is disabled.
+# -----------------------------------------------------------------------------
+set(DIAMOND_HAVE_LUAC 0)
+if(DIAMOND_USE_LUAC)
+    if(EXISTS "${DIAMOND_LUAC_DIR}/src/luac.c"
+       AND EXISTS "${DIAMOND_LUAC_DIR}/src/luac.h"
+       AND EXISTS "${DIAMOND_LUAC_DIR}/src/runtime.h")
+        set(DIAMOND_HAVE_LUAC 1)
+    else()
+        message(WARNING
+                "Diamond: LuaC sources not found in ${DIAMOND_LUAC_DIR}.\n"
+                "         Building with USE_BUILTIN_FALLBACK=1 (native block executor only).\n"
+                "         CI must run the 'Fetch LuaC nightly revision' step first.")
+    endif()
+else()
+    message(STATUS "Diamond: DIAMOND_USE_LUAC=OFF -> USE_BUILTIN_FALLBACK=1")
+endif()
+
+# -----------------------------------------------------------------------------
+#  Source lists
+# -----------------------------------------------------------------------------
+set(DIAMOND_C_SOURCES
+        core/dlog.c
+        core/dtime.c
+        core/darena.c
+        core/dstr.c
+        core/deflate.c
+        core/dhash.c
+        logic/logic_exec.c
+        logic/logic_debug.c
+        logic/lua_host.c)
+
+set(DIAMOND_CXX_SOURCES
+        scene/math.cpp
+        scene/scene.cpp
+        scene/node.cpp
+        scene/obj_loader.cpp
+        scene/aabb.cpp
+        format/diamond_format.cpp
+        format/format_io.cpp
+        logic/logic_blocks.cpp
+        logic/logic_codegen.cpp
+        render/renderer.cpp
+        render/camera.cpp
+        render/gl_context.cpp
+        render/gl_backend.cpp
+        render/gl2_backend.cpp
+        render/hybrid_backend.cpp
+        render/sprite_batch.cpp
+        render/software_raster.cpp
+        render/text_overlay.cpp
+        render/immediate.cpp
+        platform/native_window.cpp
+        platform/assets.cpp
+        jni/jni_bridge.cpp
+        jni/jni_input.cpp
+        api/diamond_api.cpp)
+
+if(DIAMOND_ENABLE_VULKAN)
+    list(APPEND DIAMOND_CXX_SOURCES render/vulkan_backend.cpp platform/vulkan_surface.cpp)
+endif()
+
+# -----------------------------------------------------------------------------
+#  Static library: flat C core (C99)
+# -----------------------------------------------------------------------------
+add_library(diamond_c STATIC ${DIAMOND_C_SOURCES})
+set_target_properties(diamond_c PROPERTIES
+        C_STANDARD 99
+        C_STANDARD_REQUIRED ON
+        C_VISIBILITY_PRESET hidden
+        POSITION_INDEPENDENT_CODE ON
+        LINKER_LANGUAGE C)
+
+target_include_directories(diamond_c
+        PUBLIC include
+        PRIVATE . include/diamond)
+
+target_compile_definitions(diamond_c PRIVATE
+        DIAMOND_HAVE_LUAC=${DIAMOND_HAVE_LUAC}
+        DIAMOND_ENABLE_VULKAN=$<BOOL:${DIAMOND_ENABLE_VULKAN}>
+        DIAMOND_SPV_PRESET=${DIAMOND_SPV_PRESET}
+        DIAMOND_LUAC_REF="${DIAMOND_LUAC_REF}"
+        DIAMOND_ENGINE_VERSION="0.1.0")
+
+target_compile_options(diamond_c PRIVATE
+        -Os
+        -fno-exceptions
+        -fno-rtti
+        -fno-asynchronous-unwind-tables
+        -fomit-frame-pointer
+        -fvisibility=hidden
+        -ffunction-sections
+        -fdata-sections
+        -Wall
+        -Wextra
+        -Wno-unused-parameter
+        -Wno-sign-compare
+        $<$<BOOL:${DIAMOND_STRICT}>:-Werror>)
+
+# -----------------------------------------------------------------------------
+#  Static library: C++23 half (scene, format, render, JNI)
+# -----------------------------------------------------------------------------
+add_library(diamond_cxx STATIC ${DIAMOND_CXX_SOURCES})
+set_target_properties(diamond_cxx PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON
+        POSITION_INDEPENDENT_CODE ON)
+
+target_include_directories(diamond_cxx
+        PUBLIC include
+        PRIVATE . include/diamond)
+
+target_compile_definitions(diamond_cxx PRIVATE
+        DIAMOND_HAVE_LUAC=${DIAMOND_HAVE_LUAC}
+        DIAMOND_ENABLE_VULKAN=$<BOOL:${DIAMOND_ENABLE_VULKAN}>
+        DIAMOND_SPV_PRESET=${DIAMOND_SPV_PRESET}
+        DIAMOND_LUAC_REF="${DIAMOND_LUAC_REF}"
+        DIAMOND_ENGINE_VERSION="0.1.0")
+
+target_compile_options(diamond_cxx PRIVATE
+        -Os
+        -fno-exceptions
+        -fno-rtti
+        -fno-threadsafe-statics
+        -fno-asynchronous-unwind-tables
+        -fomit-frame-pointer
+        -fvisibility=hidden
+        -fvisibility-inlines-hidden
+        -ffunction-sections
+        -fdata-sections
+        -Wall
+        -Wextra
+        -Wno-unused-parameter
+        -Wno-sign-compare
+        -Wno-missing-field-initializers
+        $<$<BOOL:${DIAMOND_STRICT}>:-Werror>)
+
+# -----------------------------------------------------------------------------
+#  LuaC (vendored nightly branch) — compiled as C99 into a static library.
+# -----------------------------------------------------------------------------
+if(DIAMOND_HAVE_LUAC)
+    add_library(diamond_luac STATIC "${DIAMOND_LUAC_DIR}/src/luac.c")
+    set_target_properties(diamond_luac PROPERTIES
+            C_STANDARD 99
+            C_STANDARD_REQUIRED ON
+            C_EXTENSIONS ON
+            POSITION_INDEPENDENT_CODE ON
+            LINKER_LANGUAGE C)
+
+    target_include_directories(diamond_luac PUBLIC "${DIAMOND_LUAC_DIR}/src")
+    target_compile_definitions(diamond_luac PRIVATE
+            LUAC_LIBRARY_ONLY=1
+            LUAC_EMBEDDED_RUNTIME=1
+            LUAC_RUNTIME_PATH="runtime.h")
+    target_compile_options(diamond_luac PRIVATE
+            -Os
+            -fno-exceptions
+            -fno-rtti
+            -ffunction-sections
+            -fdata-sections
+            -Wno-unused-parameter
+            -Wno-sign-compare
+            # LuaC is vendored verbatim; its warnings must not break our build.
+            -Wno-everything)
+    message(STATUS "Diamond: LuaC compiled from ${DIAMOND_LUAC_DIR}/src/luac.c")
+endif()
+
+# -----------------------------------------------------------------------------
+#  The one and only shipped shared object
+# -----------------------------------------------------------------------------
+add_library(engine SHARED
+        ${DIAMOND_ROOT}/jni/engine_exports.c)
+
+set_target_properties(engine PROPERTIES
+        OUTPUT_NAME engine
+        C_STANDARD 99
+        POSITION_INDEPENDENT_CODE ON)
+
+target_include_directories(engine PUBLIC include)
+
+target_compile_options(engine PRIVATE
+        -Os
+        -fvisibility=hidden
+        -ffunction-sections
+        -fdata-sections)
+
+target_link_libraries(engine
+        PRIVATE diamond_cxx
+        PRIVATE diamond_c
+        PRIVATE android
+        PRIVATE log
+        PRIVATE m
+        PRIVATE dl
+        PRIVATE EGL
+        PRIVATE GLESv3)
+
+if(DIAMOND_HAVE_LUAC)
+    target_link_libraries(engine PRIVATE diamond_luac)
+endif()
+
+if(DIAMOND_ENABLE_VULKAN)
+    target_link_libraries(engine PRIVATE vulkan)
+endif()
+
+# 16 KiB page size — mandatory for Android 15+ devices with 16 KiB kernels,
+# harmless on 4 KiB systems.
+target_link_options(engine PRIVATE
+        "-Wl,-z,max-page-size=16384"
+        "-Wl,--gc-sections"
+        "-Wl,--exclude-libs,ALL")
+
+# -----------------------------------------------------------------------------
+#  Build report (printed into the CI log for every ABI)
+# -----------------------------------------------------------------------------
+add_custom_command(TARGET engine POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E echo
+        "Diamond: libengine.so built for ${ANDROID_ABI} (LuaC=${DIAMOND_HAVE_LUAC}, Vulkan=${DIAMOND_ENABLE_VULKAN}, SPV=${DIAMOND_SPV_PRESET})"
+        VERBATIM)
