@@ -172,12 +172,13 @@ public class ViewportView extends SurfaceView implements SurfaceHolder.Callback 
     }
 
     private void drawGamepad(Canvas canvas) {
-        float width = getWidth();
         layoutGamepad();
+        final float width = getWidth();
+        final float height = getHeight();
         canvas.drawCircle(stickCenterX, stickCenterY, stickRadius, overlayPaint);
         canvas.drawCircle(stickCenterX, stickCenterY, 18 * density, overlayPaint);
 
-        float buttonRadius = 30 * density;
+        final float buttonRadius = 30 * density;
         canvas.drawCircle(width - buttonRadius - 24 * density,
                 height - buttonRadius - 24 * density, buttonRadius, overlayPaint);
         canvas.drawCircle(width - buttonRadius * 3 - 36 * density,
