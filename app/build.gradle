@@ -1,0 +1,144 @@
+// =============================================================================
+//  Diamond Engine — :app module
+// =============================================================================
+//  Design rules that this file enforces:
+//    * exactly two ABIs (armeabi-v7a for old 32-bit "potato" phones, arm64-v8a
+//      for modern devices) — no x86, no fat APK;
+//    * no heavyweight dependencies at all: plain Java and framework views;
+//    * the native core is the only .so (libengine.so), built by CMake from
+//      app/src/main/cpp, with LuaC vendored under cpp/third_party/luac.
+// =============================================================================
+
+apply plugin: 'com.android.application'
+
+android {
+    // Property-style assignment throughout: it is accepted by AGP 8.x and is
+    // the *only* form AGP 9's new DSL understands (method-style `minSdk 21`
+    // is gone there), so one file builds with both the pinned and the canary
+    // toolchain.
+    namespace = 'com.diamond.engine'
+
+    compileSdk = 36
+
+    // Resolved in the root build.gradle from -Pdiamond.* properties.
+    def dia = rootProject.ext.diamond
+    ndkVersion = dia.ndkVersion
+
+    defaultConfig {
+        applicationId = 'com.diamond.engine'
+        // 21 = Android 5.0. Every phone that can run a 2015 game is supported.
+        minSdk = 21
+        targetSdk = 36
+        versionCode = 1
+        versionName = '0.1.0'
+
+        // The two ABIs are the whole point of the size budget.
+        ndk {
+            abiFilters += ['armeabi-v7a', 'arm64-v8a']
+        }
+
+        externalNativeBuild {
+            cmake {
+                // C99 for the flat C core, C++23 for math/scene containers.
+                // RTTI and exceptions are deliberately NOT enabled: the C++
+                // half is built with -fno-rtti -fno-exceptions to keep unwind
+                // tables and typeinfo out of the .so.
+                cFlags += ['-std=c99']
+                cppFlags += ['-std=c++23', '-fno-exceptions', '-fno-rtti']
+                arguments += [
+                        '-DANDROID_STL=c++_static',
+                        '-DANDROID_ARM_NEON=TRUE',
+                        "-DDIAMOND_USE_LUAC=${dia.useLuaC ? 1 : 0}",
+                        "-DDIAMOND_SPV_PRESET=${dia.spvShaders ? 1 : 0}",
+                        "-DDIAMOND_LUAC_REF=${dia.luacRef}",
+                        "-DDIAMOND_NDK_VERSION=${dia.ndkVersion}",
+                        "-DDIAMOND_SHADER_INCLUDE=${projectDir}/src/main/cpp/render"
+                ]
+                targets += 'engine'
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file('src/main/cpp/CMakeLists.txt')
+            version = dia.cmakeVersion
+        }
+    }
+
+    buildTypes {
+        debug {
+            debuggable = true
+            jniDebuggable = false
+            minifyEnabled = false
+            shrinkResources = false
+            pseudoLocalesEnabled = false
+            // Debug APKs are what CI publishes; keep the native symbols so that
+            // logcat backtraces stay readable on a real phone.
+            ndk {
+                debugSymbolLevel = 'NONE'
+            }
+        }
+        release {
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
+                    'proguard-rules.pro'
+            ndk {
+                debugSymbolLevel = 'NONE'
+            }
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // 16 KiB page compatible and uncompressed-in-place loading.
+            useLegacyPackaging = false
+            keepDebugSymbols += ['**/libengine.so']
+        }
+        resources {
+            excludes += [
+                    'META-INF/*.kotlin_module',
+                    'META-INF/*.version',
+                    'META-INF/LICENSE*',
+                    'META-INF/NOTICE*',
+                    'DebugProbesKt.bin',
+                    'kotlin/**'
+            ]
+        }
+    }
+
+    androidResources {
+        // .diamond is binary; .obj/.lua must stay readable by the native core.
+        noCompress += ['diamond', 'obj', 'lua']
+    }
+
+    buildFeatures {
+        // Only the two features this project actually uses. AGP 9 removed the
+        // per-feature flags for aidl/renderscript/shaders (they are always off
+        // unless a source set uses them), so declaring them is now an error.
+        buildConfig = true
+        resValues = true
+    }
+
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
+        warningsAsErrors = false
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+}
+
+dependencies {
+    // Deliberately empty. The scene tree uses the framework ListView: pulling in
+    // androidx would add the Kotlin stdlib to the APK and force
+    // android.useAndroidX=true, against the 12 MB size budget.
+}

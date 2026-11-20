@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Same dark palette the renderer clears to, so the UI and viewport read
+         as one surface rather than a window floating on grey. -->
+    <color name="viewport_background">#17191C</color>
+    <color name="bar_background">#FF212429</color>
+    <color name="bar_foreground">#FFE8EAF0</color>
+    <color name="tree_background">#FF1C1F24</color>
+    <color name="log_background">#E6000000</color>
+    <color name="log_foreground">#FFB8E0A8</color>
+    <color name="accent">#FF4C9AFF</color>
+</resources>

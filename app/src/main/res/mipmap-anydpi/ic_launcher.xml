@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher icon for API 21-25, where adaptive icons do not exist. The
+     v26 variant next door replaces this one on newer devices. Vector based so
+     the APK does not carry five PNG icon densities. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/ic_launcher_background" />
+    <item android:drawable="@drawable/ic_launcher_foreground" />
+</layer-list>

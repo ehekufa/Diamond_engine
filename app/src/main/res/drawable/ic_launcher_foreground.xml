@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Diamond glyph. Vector, so one file serves every density: the app ships
+     two ABIs for size reasons and cannot afford five PNG icon sets too. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#4C9AFF"
+        android:pathData="M54,26 L78,54 L54,82 L30,54 Z" />
+    <path
+        android:fillColor="#9CC8FF"
+        android:pathData="M54,26 L66,54 L54,82 L42,54 Z" />
+</vector>

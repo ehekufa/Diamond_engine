@@ -1,0 +1,26 @@
+# --- Gradle / Android ------------------------------------------------------
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+captures/
+.cxx/
+
+# --- Native build output ---------------------------------------------------
+app/build/
+app/.cxx/
+*.o
+*.so
+*.a
+
+# --- Generated shader artifacts (tools/compile_shaders.sh) -----------------
+app/src/main/assets/shaders/
+app/src/main/cpp/render/shader_bin_data.h
+shaders/*.spv
+
+# --- Vendored LuaC checkout (fetched by CI) --------------------------------
+app/src/main/cpp/third_party/luac/
+
+# --- CI scratch ------------------------------------------------------------
+*.log

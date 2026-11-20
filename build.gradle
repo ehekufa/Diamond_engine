@@ -1,0 +1,50 @@
+// =============================================================================
+//  Diamond Engine — root build script
+// =============================================================================
+//  Groovy DSL on purpose: readable by both the newest AGP (9.x) and the pinned
+//  fallback (8.13.x), and it needs no Kotlin toolchain on the runner.
+//
+//  The AGP version is resolved in settings.gradle (pluginManagement.plugins) so
+//  that `-Pdiamond.agp.version=8.13.2` can downgrade the whole build from CI
+//  without touching a single file.
+// =============================================================================
+
+plugins {
+    id 'com.android.application' apply false
+}
+
+// -----------------------------------------------------------------------------
+//  Resolved toolchain, single source of truth for every module.
+// -----------------------------------------------------------------------------
+ext.diamond = [
+        agpVersion  : providers.gradleProperty('diamond.agp.version')
+                .getOrElse(providers.gradleProperty('diamondAgpVersion').getOrElse('9.0.1')),
+        ndkVersion  : providers.gradleProperty('diamond.ndk.version').getOrElse('30.0.16248370'),
+        cmakeVersion: providers.gradleProperty('diamond.cmake.version').getOrElse('3.31.5'),
+        useLuaC     : providers.gradleProperty('diamond.use_luac').getOrElse('1').toBoolean(),
+        spvShaders  : providers.gradleProperty('diamond.spv').getOrElse('1').toBoolean(),
+        luacRef     : providers.gradleProperty('diamond.luac.ref')
+                .getOrElse('arena/b210b158-luac')
+]
+
+tasks.register('printToolchain') {
+    group = 'help'
+    description = 'Prints the resolved toolchain (used by CI logs).'
+    doLast {
+        println "AGP             : ${project.ext.diamond.agpVersion}"
+        println "NDK             : ${project.ext.diamond.ndkVersion}"
+        println "CMake           : ${project.ext.diamond.cmakeVersion}"
+        println "LuaC vendored   : ${project.ext.diamond.useLuaC}"
+        println "LuaC branch     : ${project.ext.diamond.luacRef}"
+        println "SPIR-V shaders  : ${project.ext.diamond.spvShaders}"
+    }
+}
+
+tasks.register('cleanRepo', Delete) {
+    group = 'build'
+    description = 'Removes every generated directory inside the checkout.'
+    delete rootProject.layout.buildDirectory
+    delete new File(rootProject.projectDir, 'app/build')
+    delete new File(rootProject.projectDir, '.gradle')
+    delete new File(rootProject.projectDir, 'local.properties')
+}

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Diamond Engine</string>
+
+    <!-- Editor toolbar -->
+    <string name="action_play">Play</string>
+    <string name="action_add_cube">Cube</string>
+    <string name="action_add_group">Group</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_view_2d">2D</string>
+    <string name="action_view_3d">3D</string>
+    <string name="action_new">New</string>
+    <string name="action_save">Save</string>
+    <string name="action_log">Log</string>
+
+    <!-- Feedback -->
+    <string name="toast_saved">Saved to %1$s</string>
+    <string name="toast_save_failed">Save failed: %1$s</string>
+    <string name="toast_render_failed">GPU rejected the surface: %1$s</string>
+    <string name="error_no_engine">The native engine could not start on this device.</string>
+</resources>

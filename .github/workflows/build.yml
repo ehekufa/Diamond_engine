@@ -1,0 +1,429 @@
+# =============================================================================
+#  Diamond Engine — Nightly APK pipeline
+# =============================================================================
+#  Trigger : push to main, pull_request to main, manual dispatch
+#  Toolchain: newest Android SDK platform + Canary NDK + latest Gradle/AGP
+#  Result  : installable app-debug.apk attached to workflow artifacts
+#            (artifact name: diamond-nightly-<run_number>)
+#
+#  The pipeline is intentionally defensive: every "bleeding edge" component has
+#  a documented, pinned fallback that is taken automatically when the newest
+#  revision is unusable on the runner. A red build therefore never means
+#  "nothing was produced" — it means "both the canary and stable toolchains died"
+#  and the log tells you exactly which step reported it.
+# =============================================================================
+name: Diamond Engine — Nightly APK
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      ndk_version:
+        description: "Android NDK version (canary by default)"
+        required: false
+        default: ""
+      agp_version:
+        description: "Android Gradle Plugin version"
+        required: false
+        default: ""
+      luac_ref:
+        description: "LuaC branch/tag to vendor"
+        required: false
+        default: "arena/b210b158-luac"
+
+concurrency:
+  group: diamond-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # --- Toolchain pins -------------------------------------------------------
+  # Canary NDK shipped with the current runner image (>= r30). Overridable.
+  NDK_VERSION: ${{ github.event.inputs.ndk_version != '' && github.event.inputs.ndk_version || '30.0.16248370' }}
+  NDK_FALLBACK_VERSION: "29.0.14206865"
+  AGP_VERSION: ${{ github.event.inputs.agp_version != '' && github.event.inputs.agp_version || '9.0.1' }}
+  AGP_FALLBACK_VERSION: "8.13.2"
+  GRADLE_VERSION: "9.9.1"
+  GRADLE_FALLBACK_VERSION: "8.14.3"
+  SDK_COMPILE_API: "36"
+  SDK_BUILD_TOOLS: "36.0.0"
+  SDK_CMAKE: "3.31.5"
+  SDK_CMAKE_FALLBACK: "3.22.1"
+  LUAC_REPO: "https://github.com/ehekufa/LuaC.git"
+  # LuaC branch pinned for this engine line (LuaC 0.5.0 + luac_compile_bundle_c).
+  LUAC_REF: ${{ github.event.inputs.luac_ref != '' && github.event.inputs.luac_ref || 'arena/b210b158-luac' }}
+  LUAC_DIR: "app/src/main/cpp/third_party/luac"
+  MAX_APK_MB: "12"
+
+jobs:
+  build:
+    name: Build nightly APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      # -----------------------------------------------------------------------
+      # 1. Java toolchain (AGP 9 needs JDK 17+, we take the newest LTS)
+      # -----------------------------------------------------------------------
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+          java-package: jdk
+
+      # -----------------------------------------------------------------------
+      # 2. Gradle (latest stable, cached by the setup action)
+      # -----------------------------------------------------------------------
+      - name: Set up Gradle ${{ env.GRADLE_VERSION }}
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+          cache-overwrite-existing: true
+
+      # -----------------------------------------------------------------------
+      # 3. Newest Android SDK platform / build-tools / CMake / Canary NDK
+      # -----------------------------------------------------------------------
+      - name: "Android SDK components (use the runner image's toolchain)"
+        shell: bash
+        run: |
+          set -uo pipefail
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(command -v sdkmanager || true)"
+          fi
+          echo "sdkmanager: $SDKMANAGER"
+
+          # Only ask sdkmanager for what is genuinely missing. Issuing an install
+          # for a package the image already has still goes to the network, and
+          # every blocked download used to surface as a warning on every run.
+          ensure() {
+            local pkg="$1" dir="$2"
+            if [ -e "$dir" ]; then
+              echo "present: $pkg ($dir)"
+              return 0
+            fi
+            echo "::group::sdkmanager install $pkg"
+            if yes | "$SDKMANAGER" --install "$pkg" 2>&1 | tail -n 20; then
+              echo "installed: $pkg"
+              echo "::endgroup::"
+              return 0
+            fi
+            echo "::endgroup::"
+            echo "::warning::could not install $pkg"
+            return 1
+          }
+
+          if [ ! -d "${ANDROID_HOME}/platforms/android-${SDK_COMPILE_API}" ]; then
+            yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          fi
+          ensure "platforms;android-${SDK_COMPILE_API}" "${ANDROID_HOME}/platforms/android-${SDK_COMPILE_API}" || true
+          ensure "build-tools;${SDK_BUILD_TOOLS}" "${ANDROID_HOME}/build-tools/${SDK_BUILD_TOOLS}" || true
+          ensure "platform-tools" "${ANDROID_HOME}/platform-tools" || true
+          [ -d "${ANDROID_HOME}/cmake/${SDK_CMAKE}" ] || [ -d "${ANDROID_HOME}/cmake/${SDK_CMAKE_FALLBACK}" ] \
+            || ensure "cmake;${SDK_CMAKE}" "${ANDROID_HOME}/cmake/${SDK_CMAKE}" || true
+          [ -d "${ANDROID_HOME}/ndk/${NDK_VERSION}" ] || [ -d "${ANDROID_HOME}/ndk/${NDK_FALLBACK_VERSION}" ] \
+            || ensure "ndk;${NDK_VERSION}" "${ANDROID_HOME}/ndk/${NDK_VERSION}" || true
+
+          echo "--- installed NDKs ---"
+          ls -1 "${ANDROID_HOME}/ndk" 2>/dev/null || true
+          echo "--- installed CMake ---"
+          ls -1 "${ANDROID_HOME}/cmake" 2>/dev/null || true
+
+          # Build against whatever is actually present and tell Gradle about it,
+          # otherwise the build fails with "NDK not configured".
+          NDK_PRESENT="$(ls -1d "${ANDROID_HOME}"/ndk/* 2>/dev/null | sort -V | tail -n1 || true)"
+          CMAKE_PRESENT="$(ls -1d "${ANDROID_HOME}"/cmake/* 2>/dev/null | sort -V | tail -n1 || true)"
+          if [ -n "$NDK_PRESENT" ]; then
+            echo "NDK_VERSION=$(basename "$NDK_PRESENT")" >> "$GITHUB_ENV"
+            echo "using NDK $(basename "$NDK_PRESENT")"
+          else
+            echo "::error::no Android NDK is installed and sdkmanager could not fetch one"
+            exit 1
+          fi
+          if [ -n "$CMAKE_PRESENT" ]; then
+            echo "SDK_CMAKE=$(basename "$CMAKE_PRESENT")" >> "$GITHUB_ENV"
+            echo "using CMake $(basename "$CMAKE_PRESENT")"
+          fi
+
+      # -----------------------------------------------------------------------
+      # 4. Vendor the newest LuaC revision (nightly HEAD of main)
+      # -----------------------------------------------------------------------
+      - name: Fetch LuaC nightly revision
+        id: luac
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "${LUAC_DIR}"
+          mkdir -p "${LUAC_DIR}"
+          git clone --depth 1 --branch "${LUAC_REF}" "${LUAC_REPO}" "${RUNNER_TEMP}/luac-src"
+          LUAC_SHA="$(git -C "${RUNNER_TEMP}/luac-src" rev-parse HEAD)"
+          LUAC_VERSION="$(sed -n 's/^#define LUAC_VERSION "\(.*\)"/\1/p' "${RUNNER_TEMP}/luac-src/src/luac.c" | head -n1)"
+          echo "LuaC ref=${LUAC_REF} sha=${LUAC_SHA} version=${LUAC_VERSION:-unknown}"
+
+          # Keep only what the engine needs: the C library sources + license.
+          mkdir -p "${LUAC_DIR}/src"
+          cp -R "${RUNNER_TEMP}/luac-src/src/." "${LUAC_DIR}/src/"
+          cp "${RUNNER_TEMP}/luac-src/LICENSE" "${LUAC_DIR}/LICENSE" 2>/dev/null || true
+          cp "${RUNNER_TEMP}/luac-src/README.md" "${LUAC_DIR}/README.upstream.md" 2>/dev/null || true
+          {
+            echo "repo=${LUAC_REPO}"
+            echo "ref=${LUAC_REF}"
+            echo "sha=${LUAC_SHA}"
+            echo "version=${LUAC_VERSION:-unknown}"
+            echo "fetched=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > "${LUAC_DIR}/VERSION.txt"
+
+          if [ ! -f "${LUAC_DIR}/src/luac.c" ] || [ ! -f "${LUAC_DIR}/src/luac.h" ]; then
+            echo "::warning::LuaC sources are incomplete — engine will build with USE_BUILTIN_FALLBACK=1"
+            echo "use_luac=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "use_luac=1" >> "$GITHUB_OUTPUT"
+          fi
+          echo "luac_sha=${LUAC_SHA}" >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      # 5. Compile GLSL -> SPIR-V for the Vulkan backend (NDK shader-tools)
+      # -----------------------------------------------------------------------
+      - name: Compile Vulkan shaders (glslc from NDK shader-tools)
+        id: shaders
+        shell: bash
+        run: |
+          set -uo pipefail
+          NDK_ROOT="${ANDROID_HOME}/ndk/${NDK_VERSION}"
+          [ -d "$NDK_ROOT" ] || NDK_ROOT="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME}}"
+          echo "NDK root: $NDK_ROOT"
+          export GLSLC=""
+          for candidate in \
+            "$NDK_ROOT/shader-tools/linux-x86_64/glslc" \
+            "$(command -v glslc || true)" \
+            "/usr/local/bin/glslc"; do
+            if [ -n "$candidate" ] && [ -x "$candidate" ]; then GLSLC="$candidate"; break; fi
+          done
+          if [ -z "$GLSLC" ]; then
+            echo "::warning::glslc not found — Vulkan shaders will not be packaged; the Vulkan backend stays selectable but reports a clean error and the editor offers OpenGL."
+            echo "spv=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "glslc: $GLSLC"
+            GLSLC="$GLSLC" bash tools/compile_shaders.sh
+            echo "spv=1" >> "$GITHUB_OUTPUT"
+          fi
+          ls -l app/src/main/assets/shaders 2>/dev/null || true
+
+      # -----------------------------------------------------------------------
+      # 6. Static project checks (no stubs, consistent IDs, manifest sanity …)
+      # -----------------------------------------------------------------------
+      - name: Static consistency checks
+        shell: bash
+        run: python3 tools/check_repo.py
+
+      # -----------------------------------------------------------------------
+      # 7. Gradle wrapper bootstrap (keeps the repo free of binary jars)
+      # -----------------------------------------------------------------------
+      - name: Bootstrap ./gradlew
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Gradle 9 refuses `wrapper` in a directory without a build script, so
+          # give the throwaway project a minimal one. The wrapper it emits is
+          # then copied into the repository, which stays free of binary jars.
+          WRAP="${RUNNER_TEMP}/wrap"
+          rm -rf "$WRAP" && mkdir -p "$WRAP"
+          printf "rootProject.name = 'wrapper-bootstrap'\n" > "$WRAP/settings.gradle"
+          ( cd "$WRAP" && gradle wrapper --gradle-version "${GRADLE_VERSION}" --distribution-type bin --no-daemon )
+          cp -R "$WRAP/gradle"      .
+          cp    "$WRAP/gradlew"     . && chmod +x gradlew
+          cp    "$WRAP/gradlew.bat" .
+          cat gradle/wrapper/gradle-wrapper.properties
+
+      # -----------------------------------------------------------------------
+      # 8. NDK path hints for the native build
+      # -----------------------------------------------------------------------
+      - name: Write local.properties
+        shell: bash
+        run: |
+          set -euo pipefail
+          NDK_ROOT="${ANDROID_HOME}/ndk/${NDK_VERSION}"
+          if [ ! -d "$NDK_ROOT" ]; then
+            NDK_ROOT="$(ls -1d "${ANDROID_HOME}"/ndk/* 2>/dev/null | sort -V | tail -n1)"
+          fi
+          {
+            echo "sdk.dir=${ANDROID_HOME}"
+            echo "ndk.dir=${NDK_ROOT}"
+          } > local.properties
+          cat local.properties
+
+      # -----------------------------------------------------------------------
+      # 9. Build the debug APK (primary toolchain: canary NDK + latest AGP)
+      # -----------------------------------------------------------------------
+      - name: Assemble debug APK (latest toolchain)
+        id: primary
+        shell: bash
+        continue-on-error: true
+        env:
+          USE_LUAC: ${{ steps.luac.outputs.use_luac }}
+        run: |
+          set -o pipefail
+          chmod +x gradlew
+          ARGS=(
+            --no-daemon --stacktrace
+            "-Pdiamond.ndk.version=${NDK_VERSION}"
+            "-Pdiamond.cmake.version=${SDK_CMAKE}"
+            "-Pdiamond.agp.version=${AGP_VERSION}"
+            "-Pdiamond.use_luac=${USE_LUAC:-1}"
+            "-Pdiamond.spv=${{ steps.shaders.outputs.spv }}"
+          )
+          if ! ./gradlew assembleDebug "${ARGS[@]}" 2>&1 | tee build-primary.log; then
+            echo "::error::primary toolchain failed (AGP ${AGP_VERSION} / NDK ${NDK_VERSION}); retrying with the stable fallback"
+            exit 42
+          fi
+          # Gradle can exit 0 without packaging anything (an up-to-date check or
+          # a silenced task failure); the fallback must not be skipped then.
+          if ! ls app/build/outputs/apk/debug/*.apk >/dev/null 2>&1; then
+            echo "::error::Gradle finished but produced no APK"
+            exit 42
+          fi
+          echo "primary=ok" >> "$GITHUB_OUTPUT"
+
+      - name: "Assemble debug APK (stable fallback: AGP 8.13 + Gradle 8.14)"
+        if: steps.primary.outcome == 'failure'
+        id: fallback
+        # A failure here is a warning, not the end of the run: the primary step
+        # already decided the outcome and its log is preserved either way.
+        continue-on-error: true
+        shell: bash
+        env:
+          USE_LUAC: ${{ steps.luac.outputs.use_luac }}
+        run: |
+          set -o pipefail
+          # The fallback retries with an older AGP, not with an older NDK: the
+          # NDK that is actually installed is the one the project was checked
+          # against, and Gradle rejects a version that is not on disk.
+          echo "::warning::building with fallback toolchain AGP ${AGP_FALLBACK_VERSION} / Gradle ${GRADLE_FALLBACK_VERSION} / NDK ${NDK_VERSION}"
+          gradle --version
+          gradle --no-daemon assembleDebug \
+            "-Pdiamond.ndk.version=${NDK_VERSION}" \
+            "-Pdiamond.cmake.version=${SDK_CMAKE}" \
+            "-Pdiamond.agp.version=${AGP_FALLBACK_VERSION}" \
+            "-Pdiamond.use_luac=${USE_LUAC:-1}" \
+            "-Pdiamond.spv=${{ steps.shaders.outputs.spv }}" \
+            --stacktrace 2>&1 | tee build-fallback.log
+
+      # -----------------------------------------------------------------------
+      # 9b. Surface the *reason* a build failed as annotations.
+      #     GitHub's log endpoint is occasionally unavailable (and the raw logs
+      #     are megabytes), so the interesting lines are promoted to annotations,
+      #     which are small, permanent and readable from the API.
+      # -----------------------------------------------------------------------
+      - name: Report build failure details
+        if: failure() || steps.fallback.outcome == 'failure'
+        shell: bash
+        run: |
+          for f in build-primary.log build-fallback.log; do
+            [ -f "$f" ] || continue
+            echo "::group::first failures in $f"
+            grep -n -m 8 -E "What went wrong|^\* What went wrong|> .*FAILED|error:|e: file|Execution failed|Could not (resolve|find|install|determine)|NDK|CMake" "$f" | head -n 12 || true
+            echo "::endgroup::"
+            # The line after "What went wrong:" is the actual reason.
+            awk '/^\* What went wrong:/{getline; getline; print; exit}' "$f" \
+              | tr -d '\r' | while IFS= read -r line; do
+                  echo "::error title=${f} — what went wrong::${line:0:900}"
+                done
+            grep -m 4 -E "Caused by:|Execution failed for task|Could not (find|resolve|determine|install|configure)" "$f" \
+              | tr -d '\r' | head -n 4 | while IFS= read -r line; do
+                  echo "::error title=${f}::${line:0:900}"
+                done
+            # javac/C++ diagnostics look like "path:line: error: ..." and are the
+            # only place the actual mistake is reported.
+            grep -E "^[^ ].*:( error| fatal error|error:)" "$f" | tr -d '\r' | head -n 8 \
+              | while IFS= read -r line; do
+                  echo "::error title=${f}::${line:0:900}"
+                done
+          done
+
+      # -----------------------------------------------------------------------
+      # 10. Inspect the produced APK (ABI check + size budget)
+      # -----------------------------------------------------------------------
+      - name: Verify APK
+        # Runs whenever either toolchain reported success, and additionally
+        # guards against the failure mode that hid for two runs: Gradle exiting
+        # 0 (or the fallback being swallowed) with no APK on disk.
+        if: steps.primary.outcome == 'success' || steps.fallback.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(ls -1t app/build/outputs/apk/debug/*.apk 2>/dev/null | head -n1 || true)"
+          if [ -z "$APK" ]; then
+            echo "::error::no APK was produced, even though Gradle reported success"
+            exit 1
+          fi
+          echo "APK: $APK"
+          SIZE_MB=$(( $(stat -c%s "$APK") / 1024 / 1024 ))
+          echo "size_mb=${SIZE_MB}" >> "$GITHUB_ENV"
+          unzip -l "$APK" | sed -n '1,200p'
+          for abi in armeabi-v7a arm64-v8a; do
+            if ! unzip -l "$APK" | grep -q "lib/${abi}/libengine.so"; then
+              echo "::error::missing native library for ${abi}"
+              exit 1
+            fi
+          done
+          if [ "$SIZE_MB" -gt "${MAX_APK_MB}" ]; then
+            echo "::warning::APK is ${SIZE_MB} MB, above the ${MAX_APK_MB} MB budget"
+          else
+            echo "APK ${SIZE_MB} MB — inside the ${MAX_APK_MB} MB budget"
+          fi
+
+      # -----------------------------------------------------------------------
+      # 11. Publish artifacts
+      # -----------------------------------------------------------------------
+      - name: Upload nightly APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: diamond-nightly-${{ github.run_number }}
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/src/main/cpp/third_party/luac/VERSION.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-logs-${{ github.run_number }}
+          path: |
+            build-primary.log
+            build-fallback.log
+            app/build/outputs/logs/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Diamond Engine nightly"
+            echo ""
+            echo "| item | value |"
+            echo "|---|---|"
+            echo "| commit | \`${GITHUB_SHA}\` |"
+            echo "| LuaC | \`${{ steps.luac.outputs.luac_sha }}\` |"
+            echo "| NDK | \`${NDK_VERSION}\` |"
+            echo "| AGP | \`${AGP_VERSION}\` (fallback ${AGP_FALLBACK_VERSION}) |"
+            echo "| Gradle | \`${GRADLE_VERSION}\` |"
+            echo "| SPIR-V shaders | \`${{ steps.shaders.outputs.spv }}\` |"
+            echo "| APK size | ${size_mb:-?} MB |"
+            echo ""
+            echo "Artifact: **diamond-nightly-${{ github.run_number }}**"
+          } >> "$GITHUB_STEP_SUMMARY"
