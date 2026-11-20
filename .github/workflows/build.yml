@@ -280,9 +280,12 @@ jobs:
           fi
           echo "primary=ok" >> "$GITHUB_OUTPUT"
 
-      - name: "Assemble debug APK (stable fallback: AGP 8.13 + Gradle 8.14 + NDK 29)"
+      - name: "Assemble debug APK (stable fallback: AGP 8.13 + Gradle 8.14)"
         if: steps.primary.outcome == 'failure'
         id: fallback
+        # A failure here is a warning, not the end of the run: the primary step
+        # already decided the outcome and its log is preserved either way.
+        continue-on-error: true
         shell: bash
         env:
           USE_LUAC: ${{ steps.luac.outputs.use_luac }}
@@ -294,7 +297,7 @@ jobs:
           echo "::warning::building with fallback toolchain AGP ${AGP_FALLBACK_VERSION} / Gradle ${GRADLE_FALLBACK_VERSION} / NDK ${NDK_VERSION}"
           gradle --version
           gradle --no-daemon assembleDebug \
-            "-Pdiamond.ndk.version=${NDK_VERSION}"
+            "-Pdiamond.ndk.version=${NDK_VERSION}" \
             "-Pdiamond.cmake.version=${SDK_CMAKE}" \
             "-Pdiamond.agp.version=${AGP_FALLBACK_VERSION}" \
             "-Pdiamond.use_luac=${USE_LUAC:-1}" \
@@ -308,7 +311,7 @@ jobs:
       #     which are small, permanent and readable from the API.
       # -----------------------------------------------------------------------
       - name: Report build failure details
-        if: failure()
+        if: failure() || steps.fallback.outcome == 'failure'
         shell: bash
         run: |
           for f in build-primary.log build-fallback.log; do
@@ -316,8 +319,13 @@ jobs:
             echo "::group::first failures in $f"
             grep -n -m 8 -E "What went wrong|^\* What went wrong|> .*FAILED|error:|e: file|Execution failed|Could not (resolve|find|install|determine)|NDK|CMake" "$f" | head -n 12 || true
             echo "::endgroup::"
-            grep -m 6 -E "What went wrong|error:|Execution failed for task|Could not find|Could not determine" "$f" \
-              | head -n 6 | while IFS= read -r line; do
+            # The line after "What went wrong:" is the actual reason.
+            awk '/^\* What went wrong:/{getline; getline; print; exit}' "$f" \
+              | tr -d '\r' | while IFS= read -r line; do
+                  echo "::error title=${f} — what went wrong::${line:0:900}"
+                done
+            grep -m 4 -E "Caused by:|Execution failed for task|Could not (find|resolve|determine|install|configure)" "$f" \
+              | tr -d '\r' | head -n 4 | while IFS= read -r line; do
                   echo "::error title=${f}::${line:0:900}"
                 done
           done
@@ -326,6 +334,9 @@ jobs:
       # 10. Inspect the produced APK (ABI check + size budget)
       # -----------------------------------------------------------------------
       - name: Verify APK
+        # Runs whenever either toolchain produced the APK: if the primary build
+        # worked, a broken fallback path must not take the nightly down with it.
+        if: steps.primary.outcome == 'success' || steps.fallback.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
