@@ -87,9 +87,37 @@ public final class NativeBridge {
     private NativeBridge() {
     }
 
-    static {
-        // The engine is one .so; anything else in the APK is framework code.
-        System.loadLibrary("engine");
+    /**
+     * Non-null when the native library could not be loaded at all.
+     *
+     * <p>{@code System.loadLibrary} inside a static initialiser throws
+     * {@link UnsatisfiedLinkError}, and the JVM then wraps it in an
+     * {@link ExceptionInInitializerError} on the *first* reference to any
+     * member of this class — so even reading a constant would crash the app
+     * before any UI existed. Loading it explicitly keeps the failure
+     * inspectable, and the activity can show a message instead of dying.
+     */
+    private static final String LOAD_ERROR = loadEngine();
+
+    private static String loadEngine() {
+        try {
+            // The engine is one .so; anything else in the APK is framework code.
+            System.loadLibrary("engine");
+            return null;
+        } catch (UnsatisfiedLinkError | SecurityException error) {
+            String detail = error.getMessage();
+            return detail == null ? error.toString() : detail;
+        }
+    }
+
+    /** True when {@code libengine.so} was found for this device's ABI. */
+    public static boolean isLoaded() {
+        return LOAD_ERROR == null;
+    }
+
+    /** Why the library is missing, or an empty string when it is not. */
+    public static String loadError() {
+        return LOAD_ERROR == null ? "" : LOAD_ERROR;
     }
 
     // ------------------------------------------------------------- lifecycle

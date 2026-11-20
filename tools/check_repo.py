@@ -126,7 +126,12 @@ def check_jni_contract(verbose):
 
     declared = {}
     for source in JAVA.rglob("NativeBridge.java"):
-        for name in re.findall(r"native\s+[^;()]+?\s(\w+)\s*\(", source.read_text()):
+        # Only `public static native ...` declarations are JNI entry points;
+        # the word "native" also appears in ordinary comments and in private
+        # helpers (NativeBridge.loadEngine() is plain Java).
+        for name in re.findall(
+                r"\bpublic\s+static\s+native\s+[^;()]+?\s(\w+)\s*\(",
+                source.read_text()):
             declared[name] = source
     if not declared:
         notes.append("jni: no NativeBridge.java yet, contract check skipped")
@@ -135,6 +140,20 @@ def check_jni_contract(verbose):
         fail("jni", f"Java declares native {name}() with no JNI implementation")
     for name in sorted(exported - set(declared)):
         fail("jni", f"JNI exports {name}() that Java never declares")
+    # Declaring a JNI function and compiling it is not enough: if the linker
+    # discards the archive member (nothing references it), the symbol never
+    # reaches the .so and the app dies with UnsatisfiedLinkError on launch.
+    # That is exactly what happened when --whole-archive was missing.
+    cmake = CPP / "CMakeLists.txt"
+    if cmake.exists():
+        text = cmake.read_text()
+        if '"-Wl,--whole-archive"' not in text:
+            fail("jni", "CMakeLists.txt does not link the static halves with "
+                        "--whole-archive; the linker will drop every JNI entry "
+                        "point and the app will crash on launch")
+        if "--exclude-libs,ALL" in text:
+            fail("jni", "CMakeLists.txt uses --exclude-libs,ALL, which hides "
+                        "Java_* symbols even when the archive is whole-linked")
     if verbose:
         print(f"jni: {len(exported)} exported, {len(declared)} declared")
 

@@ -106,8 +106,15 @@ a nightly schedule: it resolves the NDK and CMake that the runner image already
 ships (sdkmanager's downloads are usually blocked, so nothing depends on them),
 vendors LuaC, bakes the shaders for the Vulkan backend, runs the static checks
 above, and builds the APK — retrying once with the stable AGP 8 / Gradle 8
-fallback if the newest toolchain fails. The APK is verified, then uploaded as
-the `diamond-nightly` artifact.
+fallback if the newest toolchain fails. The APK is verified, then published two ways:
+
+* **Releases → nightlies** — `nightly-<run>` tags with `diamond-engine-<run>.apk`
+  attached. The asset is a plain file, so it downloads as an APK.
+* **Actions → the run → Artifacts → `diamond-engine-apk`** — always a zip, but
+  flat: it opens on `diamond-engine-<run>.apk`, no `app/build/outputs/...`
+  folder chain to dig through.
+
+Install with `adb install -r diamond-engine-<run>.apk`.
 
 `minSdk` is 21 while Vulkan only exists from API 24, so `libengine.so`
 never links `libvulkan.so`: the backend `dlopen()`s the loader and resolves its
