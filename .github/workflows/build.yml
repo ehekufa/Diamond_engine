@@ -207,11 +207,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf "${RUNNER_TEMP}/wrap" && mkdir -p "${RUNNER_TEMP}/wrap"
-          ( cd "${RUNNER_TEMP}/wrap" && gradle wrapper --gradle-version "${GRADLE_VERSION}" --distribution-type bin -q )
-          cp -R "${RUNNER_TEMP}/wrap/gradle"      .
-          cp    "${RUNNER_TEMP}/wrap/gradlew"     . && chmod +x gradlew
-          cp    "${RUNNER_TEMP}/wrap/gradlew.bat" .
+          # Gradle 9 refuses `wrapper` in a directory without a build script, so
+          # give the throwaway project a minimal one. The wrapper it emits is
+          # then copied into the repository, which stays free of binary jars.
+          WRAP="${RUNNER_TEMP}/wrap"
+          rm -rf "$WRAP" && mkdir -p "$WRAP"
+          printf "rootProject.name = 'wrapper-bootstrap'\n" > "$WRAP/settings.gradle"
+          ( cd "$WRAP" && gradle wrapper --gradle-version "${GRADLE_VERSION}" --distribution-type bin --no-daemon )
+          cp -R "$WRAP/gradle"      .
+          cp    "$WRAP/gradlew"     . && chmod +x gradlew
+          cp    "$WRAP/gradlew.bat" .
           cat gradle/wrapper/gradle-wrapper.properties
 
       # -----------------------------------------------------------------------
