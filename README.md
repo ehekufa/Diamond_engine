@@ -101,9 +101,18 @@ tools/compile_shaders.sh             # GLSL -> SPIR-V via the NDK glslc
 succeeds, and selecting Vulkan reports *"SPIR-V shaders were not baked in"*
 instead of crashing.
 
-CI (`.github/workflows/build.yml`) runs on every push to `main`: it installs the
-canary NDK, vendors LuaC, bakes the shaders, runs the static checks above, and
-builds the APK with a pinned fallback toolchain if the newest one fails.
+CI (`.github/workflows/build.yml`) runs on every pull request into `main` and on
+a nightly schedule: it resolves the NDK and CMake that the runner image already
+ships (sdkmanager's downloads are usually blocked, so nothing depends on them),
+vendors LuaC, bakes the shaders for the Vulkan backend, runs the static checks
+above, and builds the APK — retrying once with the stable AGP 8 / Gradle 8
+fallback if the newest toolchain fails. The APK is verified, then uploaded as
+the `diamond-nightly` artifact.
+
+`minSdk` is 21 while Vulkan only exists from API 24, so `libengine.so`
+never links `libvulkan.so`: the backend `dlopen()`s the loader and resolves its
+entry points with `dlsym()`, and reports the first missing one instead of
+refusing to load on a phone without a Vulkan driver.
 
 ## Layout
 
