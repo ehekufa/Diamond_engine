@@ -18,32 +18,36 @@
 #include <cstdlib>
 #include <cstring>
 
-extern "C" {
-#include "diamond/dlog.h"
-#include "diamond/dmath.h"
-#include "diamond/dutil.h"
-#include "diamond/dvulkan.h"
-}
-
-#include "shader_bin.h"
-
-
-namespace diamond {
-
-namespace {
-
 // The Vulkan surface/swapchain plumbing is compiled only when the platform
 // headers expose the full API; the NDK always has them under <vulkan/...>, but
 // a canary NDK without them must still build. DIAMOND_ENABLE_VULKAN gates it.
+//
+// These includes MUST stay at global scope: vulkan_core.h declares C structs
+// and platform handles, and including it inside namespace diamond would give
+// every one of them a diamond:: type, which then refuses to interoperate with
+// the entry points below.
 #if DIAMOND_ENABLE_VULKAN && __has_include(<vulkan/vulkan.h>)
 #define DIAMOND_HAS_VK_HEADERS 1
+#define DIAMOND_VULKAN_TYPES_FROM_HEADERS 1
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_android.h>
 #else
 #define DIAMOND_HAS_VK_HEADERS 0
 #endif
 
-} // namespace
+extern "C" {
+#include "diamond/dlog.h"
+#include "diamond/dmath.h"
+#include "diamond/dutil.h"
+// Included after <vulkan/vulkan.h> (see DIAMOND_VULKAN_TYPES_FROM_HEADERS):
+// dvulkan.h only adds the probing functions then, so the two never redeclare
+// VkInstance/VkApplicationInfo/... against each other.
+#include "diamond/dvulkan.h"
+}
+
+#include "shader_bin.h"
+
+namespace diamond {
 
 #if DIAMOND_HAS_VK_HEADERS
 

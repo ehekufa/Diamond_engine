@@ -3,15 +3,32 @@
  * The Vulkan headers are NOT required: the backend talks to the loader through
  * a minimal, self-declared ABI so the build does not depend on a particular
  * NDK Vulkan header revision (they keep changing between canary NDKs).
+ *
+ * A translation unit that also uses the real Vulkan API must
+ *   1. #define DIAMOND_VULKAN_TYPES_FROM_HEADERS
+ *   2. #include <vulkan/vulkan.h>
+ *   3. include this header
+ * so that the handle typedefs, VkApplicationInfo and friends come from one
+ * place only. Everything in this header that actually does work (the dvulkan_*
+ * functions below) only deals in void*, int and char*, so both worlds link
+ * against the same implementation.
  */
 #ifndef DIAMOND_DVULKAN_H
 #define DIAMOND_DVULKAN_H
 
 #include <stdint.h>
 
+#if defined(DIAMOND_VULKAN_TYPES_FROM_HEADERS)
+#  if !defined(VK_VERSION_1_0) && !defined(VK_SUCCESS)
+#    error "define DIAMOND_VULKAN_TYPES_FROM_HEADERS only after including <vulkan/vulkan.h>"
+#  endif
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#if !defined(DIAMOND_VULKAN_TYPES_FROM_HEADERS)
 
 typedef void *VkInstance;
 typedef void *VkPhysicalDevice;
@@ -66,6 +83,7 @@ typedef VkResult (*PFN_vkCreateInstance)(const VkInstanceCreateInfo *, const voi
 typedef void (*PFN_vkDestroyInstance)(VkInstance, const void *);
 typedef void *(*PFN_vkGetInstanceProcAddr)(VkInstance, const char *);
 typedef VkResult (*PFN_vkEnumerateInstanceExtensionProperties)(const char *, uint32_t *, VkExtensionProperties *);
+#endif /* !DIAMOND_VULKAN_TYPES_FROM_HEADERS */
 
 /* 1 when libvulkan exists and at least one physical device enumerates. */
 int  dvulkan_probe(void);
