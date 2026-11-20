@@ -129,6 +129,24 @@ jobs:
           echo "--- installed CMake ---"
           ls -1 "${ANDROID_HOME}/cmake" 2>/dev/null || true
 
+          # The runner image usually ships the NDK and CMake already; the
+          # sdkmanager downloads above are best-effort and often blocked. Build
+          # against whatever is actually present and tell Gradle about it,
+          # otherwise the build fails with "NDK not configured".
+          NDK_PRESENT="$(ls -1d "${ANDROID_HOME}"/ndk/* 2>/dev/null | sort -V | tail -n1 || true)"
+          CMAKE_PRESENT="$(ls -1d "${ANDROID_HOME}"/cmake/* 2>/dev/null | sort -V | tail -n1 || true)"
+          if [ -n "$NDK_PRESENT" ]; then
+            echo "NDK_VERSION=$(basename "$NDK_PRESENT")" >> "$GITHUB_ENV"
+            echo "using NDK $(basename "$NDK_PRESENT")"
+          else
+            echo "::error::no Android NDK is installed and sdkmanager could not fetch one"
+            exit 1
+          fi
+          if [ -n "$CMAKE_PRESENT" ]; then
+            echo "SDK_CMAKE=$(basename "$CMAKE_PRESENT")" >> "$GITHUB_ENV"
+            echo "using CMake $(basename "$CMAKE_PRESENT")"
+          fi
+
       # -----------------------------------------------------------------------
       # 4. Vendor the newest LuaC revision (nightly HEAD of main)
       # -----------------------------------------------------------------------
@@ -251,6 +269,7 @@ jobs:
           ARGS=(
             --no-daemon --stacktrace
             "-Pdiamond.ndk.version=${NDK_VERSION}"
+            "-Pdiamond.cmake.version=${SDK_CMAKE}"
             "-Pdiamond.agp.version=${AGP_VERSION}"
             "-Pdiamond.use_luac=${USE_LUAC:-1}"
             "-Pdiamond.spv=${{ steps.shaders.outputs.spv }}"
@@ -269,14 +288,39 @@ jobs:
           USE_LUAC: ${{ steps.luac.outputs.use_luac }}
         run: |
           set -o pipefail
-          echo "::warning::building with fallback toolchain AGP ${AGP_FALLBACK_VERSION} / Gradle ${GRADLE_FALLBACK_VERSION}"
+          # The fallback retries with an older AGP, not with an older NDK: the
+          # NDK that is actually installed is the one the project was checked
+          # against, and Gradle rejects a version that is not on disk.
+          echo "::warning::building with fallback toolchain AGP ${AGP_FALLBACK_VERSION} / Gradle ${GRADLE_FALLBACK_VERSION} / NDK ${NDK_VERSION}"
           gradle --version
           gradle --no-daemon assembleDebug \
-            "-Pdiamond.ndk.version=${NDK_FALLBACK_VERSION}" \
+            "-Pdiamond.ndk.version=${NDK_VERSION}"
+            "-Pdiamond.cmake.version=${SDK_CMAKE}" \
             "-Pdiamond.agp.version=${AGP_FALLBACK_VERSION}" \
             "-Pdiamond.use_luac=${USE_LUAC:-1}" \
             "-Pdiamond.spv=${{ steps.shaders.outputs.spv }}" \
             --stacktrace 2>&1 | tee build-fallback.log
+
+      # -----------------------------------------------------------------------
+      # 9b. Surface the *reason* a build failed as annotations.
+      #     GitHub's log endpoint is occasionally unavailable (and the raw logs
+      #     are megabytes), so the interesting lines are promoted to annotations,
+      #     which are small, permanent and readable from the API.
+      # -----------------------------------------------------------------------
+      - name: Report build failure details
+        if: failure()
+        shell: bash
+        run: |
+          for f in build-primary.log build-fallback.log; do
+            [ -f "$f" ] || continue
+            echo "::group::first failures in $f"
+            grep -n -m 8 -E "What went wrong|^\* What went wrong|> .*FAILED|error:|e: file|Execution failed|Could not (resolve|find|install|determine)|NDK|CMake" "$f" | head -n 12 || true
+            echo "::endgroup::"
+            grep -m 6 -E "What went wrong|error:|Execution failed for task|Could not find|Could not determine" "$f" \
+              | head -n 6 | while IFS= read -r line; do
+                  echo "::error title=${f}::${line:0:900}"
+                done
+          done
 
       # -----------------------------------------------------------------------
       # 10. Inspect the produced APK (ABI check + size budget)
