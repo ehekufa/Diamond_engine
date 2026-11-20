@@ -30,6 +30,8 @@ project(DiamondEngine
 # -----------------------------------------------------------------------------
 option(DIAMOND_USE_LUAC     "Compile the vendored LuaC (nightly branch)" ON)
 option(DIAMOND_ENABLE_VULKAN "Build the experimental Vulkan backend" ON)
+# The Vulkan ABI headers only exist from NDK r24 on; the backend is skipped
+# automatically on older toolchains instead of failing the whole build.
 option(DIAMOND_STRICT       "Warnings are errors" OFF)
 
 set(DIAMOND_SPV_PRESET "${DIAMOND_SPV_PRESET}" CACHE STRING "SPIR-V shaders precompiled in CI (0/1)")
@@ -111,8 +113,20 @@ set(DIAMOND_CXX_SOURCES
         jni/jni_bridge.cpp
         api/diamond_api.cpp)
 
+# The Vulkan sources are always compiled when the option is on. Without
+# <vulkan/vulkan.h> they provide the "unavailable" backend, which fails attach()
+# with a real message, so a missing header degrades the app instead of the build.
+set(DIAMOND_VULKAN_ENABLED 0)
 if(DIAMOND_ENABLE_VULKAN)
+    set(DIAMOND_VULKAN_ENABLED 1)
     list(APPEND DIAMOND_CXX_SOURCES render/vulkan_backend.cpp platform/vulkan_surface.cpp)
+    include(CheckIncludeFileCXX)
+    check_include_file_cxx("vulkan/vulkan.h" DIAMOND_HAVE_VK_HEADER)
+    if(DIAMOND_HAVE_VK_HEADER)
+        message(STATUS "Diamond: Vulkan backend enabled (headers found)")
+    else()
+        message(STATUS "Diamond: Vulkan backend compiled in stub mode (no vulkan/vulkan.h)")
+    endif()
 endif()
 
 # -----------------------------------------------------------------------------
@@ -267,7 +281,8 @@ if(DIAMOND_HAVE_LUAC)
     target_link_libraries(engine PRIVATE diamond_luac)
 endif()
 
-if(DIAMOND_ENABLE_VULKAN)
+if(DIAMOND_VULKAN_ENABLED)
+    # libvulkan.so only exports the entry points; the loader does the rest.
     target_link_libraries(engine PRIVATE vulkan)
 endif()
 

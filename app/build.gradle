@@ -12,73 +12,80 @@
 apply plugin: 'com.android.application'
 
 android {
-    namespace 'com.diamond.engine'
+    // Property-style assignment throughout: it is accepted by AGP 8.x and is
+    // the *only* form AGP 9's new DSL understands (method-style `minSdk 21`
+    // is gone there), so one file builds with both the pinned and the canary
+    // toolchain.
+    namespace = 'com.diamond.engine'
 
-    compileSdk 36
+    compileSdk = 36
 
     // Resolved in the root build.gradle from -Pdiamond.* properties.
     def dia = rootProject.ext.diamond
-    ndkVersion dia.ndkVersion
+    ndkVersion = dia.ndkVersion
 
     defaultConfig {
-        applicationId 'com.diamond.engine'
+        applicationId = 'com.diamond.engine'
         // 21 = Android 5.0. Every phone that can run a 2015 game is supported.
-        minSdk 21
-        targetSdk 36
-        versionCode 1
-        versionName '0.1.0'
+        minSdk = 21
+        targetSdk = 36
+        versionCode = 1
+        versionName = '0.1.0'
 
         // The two ABIs are the whole point of the size budget.
         ndk {
-            abiFilters 'armeabi-v7a', 'arm64-v8a'
+            abiFilters += ['armeabi-v7a', 'arm64-v8a']
         }
 
         externalNativeBuild {
             cmake {
                 // C99 for the flat C core, C++23 for math/scene containers.
-                cFlags '-std=c99'
-                cppFlags '-std=c++23'
-                arguments(
+                // RTTI and exceptions are deliberately NOT enabled: the C++
+                // half is built with -fno-rtti -fno-exceptions to keep unwind
+                // tables and typeinfo out of the .so.
+                cFlags += ['-std=c99']
+                cppFlags += ['-std=c++23', '-fno-exceptions', '-fno-rtti']
+                arguments += [
                         '-DANDROID_STL=c++_static',
                         '-DANDROID_ARM_NEON=TRUE',
                         "-DDIAMOND_USE_LUAC=${dia.useLuaC ? 1 : 0}",
                         "-DDIAMOND_SPV_PRESET=${dia.spvShaders ? 1 : 0}",
                         "-DDIAMOND_LUAC_REF=${dia.luacRef}",
                         "-DDIAMOND_NDK_VERSION=${dia.ndkVersion}",
-                        '-DANDROID_CPP_FEATURES=exceptions\\ rtti'
-                )
-                targets 'engine'
+                        "-DDIAMOND_SHADER_INCLUDE=${projectDir}/src/main/cpp/render"
+                ]
+                targets += 'engine'
             }
         }
     }
 
     externalNativeBuild {
         cmake {
-            path file('src/main/cpp/CMakeLists.txt')
-            version dia.cmakeVersion
+            path = file('src/main/cpp/CMakeLists.txt')
+            version = dia.cmakeVersion
         }
     }
 
     buildTypes {
         debug {
-            debuggable true
-            jniDebuggable false
-            minifyEnabled false
-            shrinkResources false
-            pseudoLocalesEnabled false
+            debuggable = true
+            jniDebuggable = false
+            minifyEnabled = false
+            shrinkResources = false
+            pseudoLocalesEnabled = false
             // Debug APKs are what CI publishes; keep the native symbols so that
             // logcat backtraces stay readable on a real phone.
             ndk {
-                debugSymbolLevel 'NONE'
+                debugSymbolLevel = 'NONE'
             }
         }
         release {
-            minifyEnabled true
-            shrinkResources true
+            minifyEnabled = true
+            shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
                     'proguard-rules.pro'
             ndk {
-                debugSymbolLevel 'NONE'
+                debugSymbolLevel = 'NONE'
             }
         }
     }
@@ -86,7 +93,7 @@ android {
     packaging {
         jniLibs {
             // 16 KiB page compatible and uncompressed-in-place loading.
-            useLegacyPackaging false
+            useLegacyPackaging = false
             keepDebugSymbols += ['**/libengine.so']
         }
         resources {
@@ -107,22 +114,22 @@ android {
     }
 
     buildFeatures {
-        buildConfig true
-        resValues true
-        shaders false
-        aidl false
-        renderscript false
+        buildConfig = true
+        resValues = true
+        shaders = false
+        aidl = false
+        renderscript = false
     }
 
     lint {
-        abortOnError false
-        checkReleaseBuilds false
-        warningsAsErrors false
+        abortOnError = false
+        checkReleaseBuilds = false
+        warningsAsErrors = false
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     testOptions {

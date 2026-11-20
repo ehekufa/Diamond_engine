@@ -193,9 +193,14 @@ def check_resources(verbose):
 
 def check_artifacts(verbose):
     banned = {".so", ".o", ".a", ".apk", ".spv", ".class"}
+    # Generated or fetched directories are allowed to exist locally; they are
+    # never part of the commit (see .gitignore) and CI builds them from scratch.
+    skip_dirs = {"build", ".gradle", ".cxx", "third_party", ".git", "assets"}
     count = 0
     for path in ROOT.rglob("*"):
-        if not path.is_file() or ".git" in path.parts:
+        if not path.is_file():
+            continue
+        if any(part in skip_dirs for part in path.relative_to(ROOT).parts[:-1]):
             continue
         if path.name == "shader_bin_data.h":
             fail("artifacts", f"{path.relative_to(ROOT)} is generated — do not commit it")
