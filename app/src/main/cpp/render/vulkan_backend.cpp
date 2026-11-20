@@ -13,6 +13,7 @@
 #include "renderer.h"
 
 #include <android/native_window.h>
+#include <dlfcn.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -51,6 +52,236 @@ namespace diamond {
 
 #if DIAMOND_HAS_VK_HEADERS
 
+// -----------------------------------------------------------------------------
+//  Vulkan entry points, resolved at runtime
+// -----------------------------------------------------------------------------
+// libvulkan.so exists from API 24, but this app still starts on API 21 devices
+// (GLES2 fallback). Linking -lvulkan would therefore fail at minSdk 21 — the
+// NDK has no import library for that platform level — and linking it anyway
+// would make the whole .so unloadable on a phone without a Vulkan driver.
+// So, exactly like dvulkan.h promised, the loader is dlopen()ed and every
+// entry point comes from dlsym(). The macros below then let the code in this
+// file read like ordinary Vulkan code.
+namespace {
+
+struct VkDispatch {
+    PFN_vkAcquireNextImageKHR vkAcquireNextImageKHR = nullptr;
+    PFN_vkAllocateCommandBuffers vkAllocateCommandBuffers = nullptr;
+    PFN_vkAllocateMemory vkAllocateMemory = nullptr;
+    PFN_vkBeginCommandBuffer vkBeginCommandBuffer = nullptr;
+    PFN_vkBindBufferMemory vkBindBufferMemory = nullptr;
+    PFN_vkBindImageMemory vkBindImageMemory = nullptr;
+    PFN_vkCmdBeginRenderPass vkCmdBeginRenderPass = nullptr;
+    PFN_vkCmdBindIndexBuffer vkCmdBindIndexBuffer = nullptr;
+    PFN_vkCmdBindPipeline vkCmdBindPipeline = nullptr;
+    PFN_vkCmdBindVertexBuffers vkCmdBindVertexBuffers = nullptr;
+    PFN_vkCmdDrawIndexed vkCmdDrawIndexed = nullptr;
+    PFN_vkCmdEndRenderPass vkCmdEndRenderPass = nullptr;
+    PFN_vkCmdSetScissor vkCmdSetScissor = nullptr;
+    PFN_vkCmdSetViewport vkCmdSetViewport = nullptr;
+    PFN_vkCreateAndroidSurfaceKHR vkCreateAndroidSurfaceKHR = nullptr;
+    PFN_vkCreateBuffer vkCreateBuffer = nullptr;
+    PFN_vkCreateCommandPool vkCreateCommandPool = nullptr;
+    PFN_vkCreateDevice vkCreateDevice = nullptr;
+    PFN_vkCreateFramebuffer vkCreateFramebuffer = nullptr;
+    PFN_vkCreateGraphicsPipelines vkCreateGraphicsPipelines = nullptr;
+    PFN_vkCreateImage vkCreateImage = nullptr;
+    PFN_vkCreateImageView vkCreateImageView = nullptr;
+    PFN_vkCreateInstance vkCreateInstance = nullptr;
+    PFN_vkCreatePipelineLayout vkCreatePipelineLayout = nullptr;
+    PFN_vkCreateRenderPass vkCreateRenderPass = nullptr;
+    PFN_vkCreateSemaphore vkCreateSemaphore = nullptr;
+    PFN_vkCreateShaderModule vkCreateShaderModule = nullptr;
+    PFN_vkCreateSwapchainKHR vkCreateSwapchainKHR = nullptr;
+    PFN_vkDestroyBuffer vkDestroyBuffer = nullptr;
+    PFN_vkDestroyCommandPool vkDestroyCommandPool = nullptr;
+    PFN_vkDestroyDevice vkDestroyDevice = nullptr;
+    PFN_vkDestroyFramebuffer vkDestroyFramebuffer = nullptr;
+    PFN_vkDestroyImage vkDestroyImage = nullptr;
+    PFN_vkDestroyImageView vkDestroyImageView = nullptr;
+    PFN_vkDestroyInstance vkDestroyInstance = nullptr;
+    PFN_vkDestroyPipeline vkDestroyPipeline = nullptr;
+    PFN_vkDestroyPipelineLayout vkDestroyPipelineLayout = nullptr;
+    PFN_vkDestroyRenderPass vkDestroyRenderPass = nullptr;
+    PFN_vkDestroyShaderModule vkDestroyShaderModule = nullptr;
+    PFN_vkDestroySurfaceKHR vkDestroySurfaceKHR = nullptr;
+    PFN_vkDestroySwapchainKHR vkDestroySwapchainKHR = nullptr;
+    PFN_vkDeviceWaitIdle vkDeviceWaitIdle = nullptr;
+    PFN_vkEndCommandBuffer vkEndCommandBuffer = nullptr;
+    PFN_vkEnumeratePhysicalDevices vkEnumeratePhysicalDevices = nullptr;
+    PFN_vkFreeMemory vkFreeMemory = nullptr;
+    PFN_vkGetBufferMemoryRequirements vkGetBufferMemoryRequirements = nullptr;
+    PFN_vkGetDeviceQueue vkGetDeviceQueue = nullptr;
+    PFN_vkGetImageMemoryRequirements vkGetImageMemoryRequirements = nullptr;
+    PFN_vkGetPhysicalDeviceMemoryProperties vkGetPhysicalDeviceMemoryProperties = nullptr;
+    PFN_vkGetPhysicalDeviceProperties vkGetPhysicalDeviceProperties = nullptr;
+    PFN_vkGetPhysicalDeviceQueueFamilyProperties vkGetPhysicalDeviceQueueFamilyProperties = nullptr;
+    PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR vkGetPhysicalDeviceSurfaceCapabilitiesKHR = nullptr;
+    PFN_vkGetPhysicalDeviceSurfaceFormatsKHR vkGetPhysicalDeviceSurfaceFormatsKHR = nullptr;
+    PFN_vkGetSwapchainImagesKHR vkGetSwapchainImagesKHR = nullptr;
+    PFN_vkMapMemory vkMapMemory = nullptr;
+    PFN_vkQueuePresentKHR vkQueuePresentKHR = nullptr;
+    PFN_vkQueueSubmit vkQueueSubmit = nullptr;
+    PFN_vkResetCommandBuffer vkResetCommandBuffer = nullptr;
+    PFN_vkUnmapMemory vkUnmapMemory = nullptr;
+};
+
+VkDispatch g_dispatch;
+bool g_dispatch_ready = false;
+
+// Fills g_dispatch from the loader. Defined after the macros below, declared
+// here so the struct can stay private to this file.
+const char *loadDispatch();
+
+} // namespace
+
+#define DIAMOND_VK_ENTRY_REF(name) #name
+#define DIAMOND_VK_ENTRY(name) \
+    g_dispatch.name = reinterpret_cast<PFN_##name>(dlsym(library, DIAMOND_VK_ENTRY_REF(name))); \
+    if (!g_dispatch.name) missing = DIAMOND_VK_ENTRY_REF(name)
+
+namespace {
+
+// Returns the name of the first entry point the loader does not export, or
+// nullptr when everything is available.
+const char *loadDispatch() {
+    if (g_dispatch_ready) return nullptr;
+    void *library = dvulkan_library();
+    if (!library) return "libvulkan.so";
+    const char *missing = nullptr;
+    DIAMOND_VK_ENTRY(vkAcquireNextImageKHR);
+    DIAMOND_VK_ENTRY(vkAllocateCommandBuffers);
+    DIAMOND_VK_ENTRY(vkAllocateMemory);
+    DIAMOND_VK_ENTRY(vkBeginCommandBuffer);
+    DIAMOND_VK_ENTRY(vkBindBufferMemory);
+    DIAMOND_VK_ENTRY(vkBindImageMemory);
+    DIAMOND_VK_ENTRY(vkCmdBeginRenderPass);
+    DIAMOND_VK_ENTRY(vkCmdBindIndexBuffer);
+    DIAMOND_VK_ENTRY(vkCmdBindPipeline);
+    DIAMOND_VK_ENTRY(vkCmdBindVertexBuffers);
+    DIAMOND_VK_ENTRY(vkCmdDrawIndexed);
+    DIAMOND_VK_ENTRY(vkCmdEndRenderPass);
+    DIAMOND_VK_ENTRY(vkCmdSetScissor);
+    DIAMOND_VK_ENTRY(vkCmdSetViewport);
+    DIAMOND_VK_ENTRY(vkCreateAndroidSurfaceKHR);
+    DIAMOND_VK_ENTRY(vkCreateBuffer);
+    DIAMOND_VK_ENTRY(vkCreateCommandPool);
+    DIAMOND_VK_ENTRY(vkCreateDevice);
+    DIAMOND_VK_ENTRY(vkCreateFramebuffer);
+    DIAMOND_VK_ENTRY(vkCreateGraphicsPipelines);
+    DIAMOND_VK_ENTRY(vkCreateImage);
+    DIAMOND_VK_ENTRY(vkCreateImageView);
+    DIAMOND_VK_ENTRY(vkCreateInstance);
+    DIAMOND_VK_ENTRY(vkCreatePipelineLayout);
+    DIAMOND_VK_ENTRY(vkCreateRenderPass);
+    DIAMOND_VK_ENTRY(vkCreateSemaphore);
+    DIAMOND_VK_ENTRY(vkCreateShaderModule);
+    DIAMOND_VK_ENTRY(vkCreateSwapchainKHR);
+    DIAMOND_VK_ENTRY(vkDestroyBuffer);
+    DIAMOND_VK_ENTRY(vkDestroyCommandPool);
+    DIAMOND_VK_ENTRY(vkDestroyDevice);
+    DIAMOND_VK_ENTRY(vkDestroyFramebuffer);
+    DIAMOND_VK_ENTRY(vkDestroyImage);
+    DIAMOND_VK_ENTRY(vkDestroyImageView);
+    DIAMOND_VK_ENTRY(vkDestroyInstance);
+    DIAMOND_VK_ENTRY(vkDestroyPipeline);
+    DIAMOND_VK_ENTRY(vkDestroyPipelineLayout);
+    DIAMOND_VK_ENTRY(vkDestroyRenderPass);
+    DIAMOND_VK_ENTRY(vkDestroyShaderModule);
+    DIAMOND_VK_ENTRY(vkDestroySurfaceKHR);
+    DIAMOND_VK_ENTRY(vkDestroySwapchainKHR);
+    DIAMOND_VK_ENTRY(vkDeviceWaitIdle);
+    DIAMOND_VK_ENTRY(vkEndCommandBuffer);
+    DIAMOND_VK_ENTRY(vkEnumeratePhysicalDevices);
+    DIAMOND_VK_ENTRY(vkFreeMemory);
+    DIAMOND_VK_ENTRY(vkGetBufferMemoryRequirements);
+    DIAMOND_VK_ENTRY(vkGetDeviceQueue);
+    DIAMOND_VK_ENTRY(vkGetImageMemoryRequirements);
+    DIAMOND_VK_ENTRY(vkGetPhysicalDeviceMemoryProperties);
+    DIAMOND_VK_ENTRY(vkGetPhysicalDeviceProperties);
+    DIAMOND_VK_ENTRY(vkGetPhysicalDeviceQueueFamilyProperties);
+    DIAMOND_VK_ENTRY(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
+    DIAMOND_VK_ENTRY(vkGetPhysicalDeviceSurfaceFormatsKHR);
+    DIAMOND_VK_ENTRY(vkGetSwapchainImagesKHR);
+    DIAMOND_VK_ENTRY(vkMapMemory);
+    DIAMOND_VK_ENTRY(vkQueuePresentKHR);
+    DIAMOND_VK_ENTRY(vkQueueSubmit);
+    DIAMOND_VK_ENTRY(vkResetCommandBuffer);
+    DIAMOND_VK_ENTRY(vkUnmapMemory);
+    if (missing) return missing;
+    g_dispatch_ready = true;
+    return nullptr;
+}
+
+} // namespace
+
+// -----------------------------------------------------------------------------
+//  Entry-point aliases
+// -----------------------------------------------------------------------------
+// After the loader above (which must see the real g_dispatch members), the
+// backend body can read like ordinary Vulkan code: vkCreateInstance() is
+// g_dispatch.vkCreateInstance, and it is never null because loadDispatch()
+// refuses to attach otherwise.
+#define vkAcquireNextImageKHR g_dispatch.vkAcquireNextImageKHR
+#define vkAllocateCommandBuffers g_dispatch.vkAllocateCommandBuffers
+#define vkAllocateMemory g_dispatch.vkAllocateMemory
+#define vkBeginCommandBuffer g_dispatch.vkBeginCommandBuffer
+#define vkBindBufferMemory g_dispatch.vkBindBufferMemory
+#define vkBindImageMemory g_dispatch.vkBindImageMemory
+#define vkCmdBeginRenderPass g_dispatch.vkCmdBeginRenderPass
+#define vkCmdBindIndexBuffer g_dispatch.vkCmdBindIndexBuffer
+#define vkCmdBindPipeline g_dispatch.vkCmdBindPipeline
+#define vkCmdBindVertexBuffers g_dispatch.vkCmdBindVertexBuffers
+#define vkCmdDrawIndexed g_dispatch.vkCmdDrawIndexed
+#define vkCmdEndRenderPass g_dispatch.vkCmdEndRenderPass
+#define vkCmdSetScissor g_dispatch.vkCmdSetScissor
+#define vkCmdSetViewport g_dispatch.vkCmdSetViewport
+#define vkCreateAndroidSurfaceKHR g_dispatch.vkCreateAndroidSurfaceKHR
+#define vkCreateBuffer g_dispatch.vkCreateBuffer
+#define vkCreateCommandPool g_dispatch.vkCreateCommandPool
+#define vkCreateDevice g_dispatch.vkCreateDevice
+#define vkCreateFramebuffer g_dispatch.vkCreateFramebuffer
+#define vkCreateGraphicsPipelines g_dispatch.vkCreateGraphicsPipelines
+#define vkCreateImage g_dispatch.vkCreateImage
+#define vkCreateImageView g_dispatch.vkCreateImageView
+#define vkCreateInstance g_dispatch.vkCreateInstance
+#define vkCreatePipelineLayout g_dispatch.vkCreatePipelineLayout
+#define vkCreateRenderPass g_dispatch.vkCreateRenderPass
+#define vkCreateSemaphore g_dispatch.vkCreateSemaphore
+#define vkCreateShaderModule g_dispatch.vkCreateShaderModule
+#define vkCreateSwapchainKHR g_dispatch.vkCreateSwapchainKHR
+#define vkDestroyBuffer g_dispatch.vkDestroyBuffer
+#define vkDestroyCommandPool g_dispatch.vkDestroyCommandPool
+#define vkDestroyDevice g_dispatch.vkDestroyDevice
+#define vkDestroyFramebuffer g_dispatch.vkDestroyFramebuffer
+#define vkDestroyImage g_dispatch.vkDestroyImage
+#define vkDestroyImageView g_dispatch.vkDestroyImageView
+#define vkDestroyInstance g_dispatch.vkDestroyInstance
+#define vkDestroyPipeline g_dispatch.vkDestroyPipeline
+#define vkDestroyPipelineLayout g_dispatch.vkDestroyPipelineLayout
+#define vkDestroyRenderPass g_dispatch.vkDestroyRenderPass
+#define vkDestroyShaderModule g_dispatch.vkDestroyShaderModule
+#define vkDestroySurfaceKHR g_dispatch.vkDestroySurfaceKHR
+#define vkDestroySwapchainKHR g_dispatch.vkDestroySwapchainKHR
+#define vkDeviceWaitIdle g_dispatch.vkDeviceWaitIdle
+#define vkEndCommandBuffer g_dispatch.vkEndCommandBuffer
+#define vkEnumeratePhysicalDevices g_dispatch.vkEnumeratePhysicalDevices
+#define vkFreeMemory g_dispatch.vkFreeMemory
+#define vkGetBufferMemoryRequirements g_dispatch.vkGetBufferMemoryRequirements
+#define vkGetDeviceQueue g_dispatch.vkGetDeviceQueue
+#define vkGetImageMemoryRequirements g_dispatch.vkGetImageMemoryRequirements
+#define vkGetPhysicalDeviceMemoryProperties g_dispatch.vkGetPhysicalDeviceMemoryProperties
+#define vkGetPhysicalDeviceProperties g_dispatch.vkGetPhysicalDeviceProperties
+#define vkGetPhysicalDeviceQueueFamilyProperties g_dispatch.vkGetPhysicalDeviceQueueFamilyProperties
+#define vkGetPhysicalDeviceSurfaceCapabilitiesKHR g_dispatch.vkGetPhysicalDeviceSurfaceCapabilitiesKHR
+#define vkGetPhysicalDeviceSurfaceFormatsKHR g_dispatch.vkGetPhysicalDeviceSurfaceFormatsKHR
+#define vkGetSwapchainImagesKHR g_dispatch.vkGetSwapchainImagesKHR
+#define vkMapMemory g_dispatch.vkMapMemory
+#define vkQueuePresentKHR g_dispatch.vkQueuePresentKHR
+#define vkQueueSubmit g_dispatch.vkQueueSubmit
+#define vkResetCommandBuffer g_dispatch.vkResetCommandBuffer
+#define vkUnmapMemory g_dispatch.vkUnmapMemory
+
 namespace {
 
 constexpr int kMaxFramesInFlight = 2;
@@ -83,6 +314,12 @@ public:
         if (!dvulkan_probe()) {
             diamond_fail(DIAMOND_ERR_UNSUPPORTED, err, errCap,
                          "this device has no working Vulkan driver");
+            return false;
+        }
+        if (const char *missing = loadDispatch()) {
+            diamond_fail(DIAMOND_ERR_UNSUPPORTED, err, errCap,
+                         "the Vulkan loader does not export %s; this driver is too old",
+                         missing);
             return false;
         }
         if (!createInstance(err, errCap)) return false;

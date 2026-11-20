@@ -122,10 +122,25 @@ if(DIAMOND_ENABLE_VULKAN)
     list(APPEND DIAMOND_CXX_SOURCES render/vulkan_backend.cpp platform/vulkan_surface.cpp)
     include(CheckIncludeFileCXX)
     check_include_file_cxx("vulkan/vulkan.h" DIAMOND_HAVE_VK_HEADER)
-    if(DIAMOND_HAVE_VK_HEADER)
-        message(STATUS "Diamond: Vulkan backend enabled (headers found)")
+
+    # The loader comes in two shapes. With the NDK's libvulkan.so, -lvulkan
+    # resolves. With a staged platform tree whose lib dir is outside the default
+    # search path the import library is missing even though the header is there,
+    # and linking would fail. In that case the backend still works at runtime:
+    # every dvulkan_* path dlopen()s libvulkan.so and resolves entry points
+    # through vkGetInstanceProcAddr, so no link against the loader is needed.
+    find_library(DIAMOND_VULKAN_LIBRARY vulkan)
+    if(DIAMOND_HAVE_VK_HEADER AND DIAMOND_VULKAN_LIBRARY)
+        message(STATUS "Diamond: Vulkan backend enabled (headers + ${DIAMOND_VULKAN_LIBRARY})")
+        set(DIAMOND_LINK_VULKAN 1)
+    elseif(DIAMOND_HAVE_VK_HEADER)
+        message(STATUS
+                "Diamond: Vulkan backend enabled, headers only — libvulkan.so is not "
+                "in the link path, the loader is dlopen()ed at runtime instead")
+        set(DIAMOND_LINK_VULKAN 0)
     else()
         message(STATUS "Diamond: Vulkan backend compiled in stub mode (no vulkan/vulkan.h)")
+        set(DIAMOND_LINK_VULKAN 0)
     endif()
 endif()
 
@@ -289,9 +304,10 @@ if(DIAMOND_HAVE_LUAC)
     target_link_libraries(engine PRIVATE diamond_luac)
 endif()
 
-if(DIAMOND_VULKAN_ENABLED)
+if(DIAMOND_LINK_VULKAN)
     # libvulkan.so only exports the entry points; the loader does the rest.
-    target_link_libraries(engine PRIVATE vulkan)
+    # Not linked when the import library is absent — see the probe above.
+    target_link_libraries(engine PRIVATE "${DIAMOND_VULKAN_LIBRARY}")
 endif()
 
 # 16 KiB page size — mandatory for Android 15+ devices with 16 KiB kernels,
