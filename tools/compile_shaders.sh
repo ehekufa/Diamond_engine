@@ -53,7 +53,7 @@ GLSLC="${GLSLC_BIN}" python3 "${ROOT}/tools/compile_shaders.py" \
     }
 
 # Keep the .spv files next to the app assets so a bug report can include them
-# and so tools/validate_apk.sh can assert they were packaged.
+# and so the APK inspection step in CI can assert they were packaged.
 for spv in "${HEADER_DIR}"/*.spv; do
     [ -e "${spv}" ] || continue
     cp "${spv}" "${ASSET_DIR}/$(basename "${spv}")"
