@@ -226,6 +226,48 @@ def check_headers_vs_sources(verbose):
         print(f"headers: {len(list(include_dir.glob('*.h')))} public header(s)")
 
 
+def check_public_abi(verbose):
+    """Every DIAMOND_API declaration in diamond.h must have a definition.
+
+    A missing definition only shows up as an undefined symbol while linking the
+    .so, which costs a full NDK build to discover; parse both sides instead.
+    """
+    header = CPP / "include" / "diamond.h"
+    api = CPP / "api" / "diamond_api.cpp"
+    if not header.exists() or not api.exists():
+        fail("abi", "include/diamond.h or api/diamond_api.cpp is missing")
+        return
+    text = re.sub(r"/\*.*?\*/", "", header.read_text(), flags=re.S)
+    declared = []
+    for decl in re.findall(r"DIAMOND_API\s+([^;]+);", text):
+        match = re.search(r"(\w+)\s*\(", decl)
+        if match and match.group(1).startswith("diamond_"):
+            if match.group(1) not in declared:
+                declared.append(match.group(1))
+
+    # engine_* callbacks live in dlogic.h and in logic/logic_exec.c.
+    logic_header = CPP / "include" / "diamond" / "dlogic.h"
+    logic_source = CPP / "logic" / "logic_exec.c"
+    engine_declared = []
+    if logic_header.exists():
+        logic_text = re.sub(r"/\*.*?\*/", "", logic_header.read_text(), flags=re.S)
+        for decl in re.findall(r"DIAMOND_API\s+([^;]+);", logic_text):
+            match = re.search(r"(\w+)\s*\(", decl)
+            if match and match.group(1).startswith("engine_"):
+                engine_declared.append(match.group(1))
+
+    api_text = api.read_text()
+    logic_text = logic_source.read_text() if logic_source.exists() else ""
+    for name in declared:
+        if not re.search(rf"^\s*[\w\s*]+\b{name}\s*\(", api_text, re.M):
+            fail("abi", f"diamond.h declares {name}() but api/diamond_api.cpp does not define it")
+    for name in engine_declared:
+        if not re.search(rf"^\s*[\w\s*]+\b{name}\s*\(", logic_text, re.M):
+            fail("abi", f"dlogic.h declares {name}() but logic/logic_exec.c does not define it")
+    if verbose:
+        print(f"abi: {len(declared)} public + {len(engine_declared)} engine symbol(s)")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--verbose", action="store_true")
@@ -237,6 +279,7 @@ def main():
     check_jni_contract(args.verbose)
     check_manifest(args.verbose)
     check_resources(args.verbose)
+    check_public_abi(args.verbose)
     check_headers_vs_sources(args.verbose)
     check_artifacts(args.verbose)
 
