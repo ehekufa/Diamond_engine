@@ -318,7 +318,10 @@ target_link_libraries(engine PRIVATE
         m
         dl
         EGL
-        GLESv3)
+        GLESv3
+        # AndroidBitmap_* (jni_bridge.cpp uploads a Bitmap as a sprite texture)
+        # lives in libjnigraphics, not in libandroid.
+        jnigraphics)
 
 if(DIAMOND_LINK_VULKAN)
     # libvulkan.so only exports the entry points; the loader does the rest.
