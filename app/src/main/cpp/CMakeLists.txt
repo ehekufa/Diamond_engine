@@ -144,6 +144,14 @@ target_include_directories(diamond_c
         PUBLIC include
         PRIVATE . include/diamond)
 
+# logic/lua_host.c is compiled here but #includes "luac.h" when LuaC is
+# present, so diamond_c needs LuaC's headers too. Linking diamond_luac to it
+# would drag the whole LuaC library into every consumer of the C core, so only
+# the include path is shared.
+if(DIAMOND_HAVE_LUAC)
+    target_include_directories(diamond_c PRIVATE "${DIAMOND_LUAC_DIR}/src")
+endif()
+
 target_compile_definitions(diamond_c PRIVATE
         DIAMOND_HAVE_LUAC=${DIAMOND_HAVE_LUAC}
         DIAMOND_ENABLE_VULKAN=$<BOOL:${DIAMOND_ENABLE_VULKAN}>
