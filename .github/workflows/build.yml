@@ -68,7 +68,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
@@ -76,7 +76,7 @@ jobs:
       # 1. Java toolchain (AGP 9 needs JDK 17+, we take the newest LTS)
       # -----------------------------------------------------------------------
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
@@ -86,7 +86,7 @@ jobs:
       # 2. Gradle (latest stable, cached by the setup action)
       # -----------------------------------------------------------------------
       - name: Set up Gradle ${{ env.GRADLE_VERSION }}
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
           cache-overwrite-existing: true
@@ -94,7 +94,7 @@ jobs:
       # -----------------------------------------------------------------------
       # 3. Newest Android SDK platform / build-tools / CMake / Canary NDK
       # -----------------------------------------------------------------------
-      - name: "Install Android SDK components (canary NDK + CMake)"
+      - name: "Android SDK components (use the runner image's toolchain)"
         shell: bash
         run: |
           set -uo pipefail
@@ -103,10 +103,16 @@ jobs:
             SDKMANAGER="$(command -v sdkmanager || true)"
           fi
           echo "sdkmanager: $SDKMANAGER"
-          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
 
-          install_pkg() {
-            local pkg="$1"
+          # Only ask sdkmanager for what is genuinely missing. Issuing an install
+          # for a package the image already has still goes to the network, and
+          # every blocked download used to surface as a warning on every run.
+          ensure() {
+            local pkg="$1" dir="$2"
+            if [ -e "$dir" ]; then
+              echo "present: $pkg ($dir)"
+              return 0
+            fi
             echo "::group::sdkmanager install $pkg"
             if yes | "$SDKMANAGER" --install "$pkg" 2>&1 | tail -n 20; then
               echo "installed: $pkg"
@@ -118,20 +124,23 @@ jobs:
             return 1
           }
 
-          install_pkg "platforms;android-${SDK_COMPILE_API}" || true
-          install_pkg "build-tools;${SDK_BUILD_TOOLS}"        || true
-          install_pkg "platform-tools"                        || true
-          install_pkg "cmake;${SDK_CMAKE}"                    || install_pkg "cmake;${SDK_CMAKE_FALLBACK}" || true
-          install_pkg "ndk;${NDK_VERSION}"                    || install_pkg "ndk;${NDK_FALLBACK_VERSION}" || true
+          if [ ! -d "${ANDROID_HOME}/platforms/android-${SDK_COMPILE_API}" ]; then
+            yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          fi
+          ensure "platforms;android-${SDK_COMPILE_API}" "${ANDROID_HOME}/platforms/android-${SDK_COMPILE_API}" || true
+          ensure "build-tools;${SDK_BUILD_TOOLS}" "${ANDROID_HOME}/build-tools/${SDK_BUILD_TOOLS}" || true
+          ensure "platform-tools" "${ANDROID_HOME}/platform-tools" || true
+          [ -d "${ANDROID_HOME}/cmake/${SDK_CMAKE}" ] || [ -d "${ANDROID_HOME}/cmake/${SDK_CMAKE_FALLBACK}" ] \
+            || ensure "cmake;${SDK_CMAKE}" "${ANDROID_HOME}/cmake/${SDK_CMAKE}" || true
+          [ -d "${ANDROID_HOME}/ndk/${NDK_VERSION}" ] || [ -d "${ANDROID_HOME}/ndk/${NDK_FALLBACK_VERSION}" ] \
+            || ensure "ndk;${NDK_VERSION}" "${ANDROID_HOME}/ndk/${NDK_VERSION}" || true
 
           echo "--- installed NDKs ---"
           ls -1 "${ANDROID_HOME}/ndk" 2>/dev/null || true
           echo "--- installed CMake ---"
           ls -1 "${ANDROID_HOME}/cmake" 2>/dev/null || true
 
-          # The runner image usually ships the NDK and CMake already; the
-          # sdkmanager downloads above are best-effort and often blocked. Build
-          # against whatever is actually present and tell Gradle about it,
+          # Build against whatever is actually present and tell Gradle about it,
           # otherwise the build fails with "NDK not configured".
           NDK_PRESENT="$(ls -1d "${ANDROID_HOME}"/ndk/* 2>/dev/null | sort -V | tail -n1 || true)"
           CMAKE_PRESENT="$(ls -1d "${ANDROID_HOME}"/cmake/* 2>/dev/null | sort -V | tail -n1 || true)"
@@ -378,7 +387,7 @@ jobs:
       # 11. Publish artifacts
       # -----------------------------------------------------------------------
       - name: Upload nightly APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: diamond-nightly-${{ github.run_number }}
           path: |
@@ -389,7 +398,7 @@ jobs:
 
       - name: Upload build logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-logs-${{ github.run_number }}
           path: |
