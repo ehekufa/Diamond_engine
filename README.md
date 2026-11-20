@@ -23,6 +23,12 @@ AndroidX, no Kotlin, no Compose.
 * **Visual block logic** — drag blocks (`OnStart`, `OnUpdate`, `Move`,
   `Rotate`, `SetColor`, `IfButton`, …) on a canvas. The same graph can be
   exported as Lua, so a project can graduate from blocks to code.
+
+  LuaC (vendored, compiled into the `.so`) validates the source and can emit
+  the matching C. When LuaC is not compiled in — the default until CI vendors
+  it — the engine falls back to a structural check of the subset the generator
+  emits (balanced blocks and brackets, terminated strings), so the code editor
+  still points at a missing `end` instead of silently accepting it.
 * **Three view modes** — 2D (sprites, no perspective), 2.5D (3D with a fixed
   camera) and 3D (orbit/pan/zoom).
 * **Play mode** — runs the block graph with an on-screen gamepad, forward touch
