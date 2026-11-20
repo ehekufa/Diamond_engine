@@ -278,6 +278,12 @@ jobs:
             echo "::error::primary toolchain failed (AGP ${AGP_VERSION} / NDK ${NDK_VERSION}); retrying with the stable fallback"
             exit 42
           fi
+          # Gradle can exit 0 without packaging anything (an up-to-date check or
+          # a silenced task failure); the fallback must not be skipped then.
+          if ! ls app/build/outputs/apk/debug/*.apk >/dev/null 2>&1; then
+            echo "::error::Gradle finished but produced no APK"
+            exit 42
+          fi
           echo "primary=ok" >> "$GITHUB_OUTPUT"
 
       - name: "Assemble debug APK (stable fallback: AGP 8.13 + Gradle 8.14)"
@@ -334,14 +340,18 @@ jobs:
       # 10. Inspect the produced APK (ABI check + size budget)
       # -----------------------------------------------------------------------
       - name: Verify APK
-        # Runs whenever either toolchain produced the APK: if the primary build
-        # worked, a broken fallback path must not take the nightly down with it.
+        # Runs whenever either toolchain reported success, and additionally
+        # guards against the failure mode that hid for two runs: Gradle exiting
+        # 0 (or the fallback being swallowed) with no APK on disk.
         if: steps.primary.outcome == 'success' || steps.fallback.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
-          APK="$(ls -1t app/build/outputs/apk/debug/*.apk | head -n1)"
-          test -n "$APK"
+          APK="$(ls -1t app/build/outputs/apk/debug/*.apk 2>/dev/null | head -n1 || true)"
+          if [ -z "$APK" ]; then
+            echo "::error::no APK was produced, even though Gradle reported success"
+            exit 1
+          fi
           echo "APK: $APK"
           SIZE_MB=$(( $(stat -c%s "$APK") / 1024 / 1024 ))
           echo "size_mb=${SIZE_MB}" >> "$GITHUB_ENV"
