@@ -59,10 +59,20 @@ public final class Engine {
         this.cacheDir = cacheDir;
     }
 
-    /** Creates (once) and initialises the engine for {@code filesDir}. */
+    /**
+     * Creates (once) and initialises the engine for {@code filesDir}.
+     *
+     * <p>Throws instead of crashing when the native library is absent for this
+     * device's ABI: without this check the very first {@code NativeBridge}
+     * reference dies with {@link UnsatisfiedLinkError} and the process is gone
+     * before the activity can explain anything.
+     */
     public static synchronized Engine create(String filesDir, String cacheDir, int apiLevel) {
         if (instance != null && instance.initialised) {
             return instance;
+        }
+        if (!NativeBridge.isLoaded()) {
+            throw new EngineException(NativeBridge.ERR_UNSUPPORTED, NativeBridge.loadError());
         }
         Engine engine = new Engine(filesDir, cacheDir);
         int status = NativeBridge.init(filesDir, cacheDir, apiLevel);

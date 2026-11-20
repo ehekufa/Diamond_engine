@@ -46,6 +46,19 @@ public final class EditorActivity extends Activity implements ViewportView.Liste
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        try {
+            startEditor();
+        } catch (LinkageError error) {
+            // A missing or partially exported libengine.so surfaces here as
+            // UnsatisfiedLinkError/NoSuchMethodError. Dying on launch with a
+            // system dialog helps nobody; show the real reason instead.
+            Log.e(TAG, "native library unusable", error);
+            setContentView(R.layout.activity_editor);
+            showFatal(getString(R.string.error_no_engine) + "\n" + error);
+        }
+    }
+
+    private void startEditor() {
         setContentView(R.layout.activity_editor);
 
         viewport = findViewById(R.id.viewport);
@@ -289,20 +302,46 @@ public final class EditorActivity extends Activity implements ViewportView.Liste
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
     }
 
+    /**
+     * Replaces the editor with a readable error.
+     *
+     * <p>{@code fatal_error} lives inside the viewport's FrameLayout, so hiding
+     * the root's children one by one would hide the message along with the
+     * container it is in. Everything except the ancestors of {@code fatal_error}
+     * is hidden instead, which keeps the text on screen.
+     */
     private void showFatal(String message) {
-        TextView error = findViewById(R.id.fatal_error);
+        final TextView error = findViewById(R.id.fatal_error);
         if (error != null) {
             error.setText(message);
             error.setVisibility(View.VISIBLE);
         }
-        ViewGroup root = findViewById(R.id.editor_root);
+        final ViewGroup root = findViewById(R.id.editor_root);
         if (root != null) {
-            for (int i = 0; i < root.getChildCount(); i++) {
-                View child = root.getChildAt(i);
-                if (child.getId() != R.id.fatal_error) {
-                    child.setVisibility(View.GONE);
-                }
+            hideSiblingsAlong(root, error);
+        }
+    }
+
+    /** Hides every view that is not {@code keep} or one of its ancestors. */
+    private static boolean hideSiblingsAlong(ViewGroup group, View keep) {
+        if (keep == null) {
+            group.setVisibility(View.GONE);
+            return false;
+        }
+        boolean holdsKeep = false;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            if (child == keep) {
+                child.setVisibility(View.VISIBLE);
+                holdsKeep = true;
+            } else if (child instanceof ViewGroup
+                    && hideSiblingsAlong((ViewGroup) child, keep)) {
+                child.setVisibility(View.VISIBLE);
+                holdsKeep = true;
+            } else {
+                child.setVisibility(View.GONE);
             }
         }
+        return holdsKeep;
     }
 }

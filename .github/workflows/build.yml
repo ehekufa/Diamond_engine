@@ -39,7 +39,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write    # nightly release with the APK attached
 
 env:
   # --- Toolchain pins -------------------------------------------------------
@@ -377,6 +377,37 @@ jobs:
               exit 1
             fi
           done
+          # The classes and the .so agreeing on nothing is the failure mode that
+          # ships an app which dies on launch: Java declares native methods, the
+          # library exports no matching symbol, and System.loadLibrary() throws
+          # UnsatisfiedLinkError before the first screen. Compare the two.
+          NM="${ANDROID_NDK_HOME:-$(ls -1d "${ANDROID_HOME}"/ndk/* | sort -V | tail -n1)}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+          JAVA="$(ls -1t app/build/intermediates/javac/debug/**/classes 2>/dev/null | head -n1)"
+          rm -rf verify-so && mkdir -p verify-so
+          unzip -o -q "$APK" 'lib/arm64-v8a/libengine.so' -d verify-so
+          SO=verify-so/lib/arm64-v8a/libengine.so
+          if [ ! -f "$SO" ]; then
+            echo "::error::libengine.so is not in the APK"
+            exit 1
+          fi
+          EXPORTED=$("$NM" -D --defined-only "$SO" | grep -c ' Java_com_diamond_engine_jni_NativeBridge_' || true)
+          echo "JNI entry points exported: ${EXPORTED}"
+          DECLARED=$(grep -oE 'native [^;]* [a-zA-Z0-9_]+\(' \
+              app/src/main/java/com/diamond/engine/jni/NativeBridge.java \
+              | sed -E 's/.* ([a-zA-Z0-9_]+)\($/\1/' | sort -u | wc -l)
+          echo "native methods declared : ${DECLARED}"
+          if [ "$EXPORTED" -eq 0 ]; then
+            echo "::error::libengine.so exports no JNI symbols — the app would crash on launch"
+            exit 1
+          fi
+          if [ "$EXPORTED" -lt "$DECLARED" ]; then
+            echo "::error::${DECLARED} native methods declared but only ${EXPORTED} exported"
+            exit 1
+          fi
+          if [ -n "$JAVA" ]; then
+            echo "javac output: $JAVA (classes present)"
+          fi
+
           if [ "$SIZE_MB" -gt "${MAX_APK_MB}" ]; then
             echo "::warning::APK is ${SIZE_MB} MB, above the ${MAX_APK_MB} MB budget"
           else
@@ -386,15 +417,48 @@ jobs:
       # -----------------------------------------------------------------------
       # 11. Publish artifacts
       # -----------------------------------------------------------------------
+      # Gradle writes to app/build/outputs/apk/debug/, which upload-artifact
+      # reproduces verbatim: four levels of empty folders inside the zip, and
+      # one more level of nesting once the artifact itself is downloaded. The
+      # APK is copied to a flat directory first, so the archive opens on a file
+      # rather than on a directory called "app".
+      - name: Stage APK for download
+        if: steps.primary.outcome == 'success' || steps.fallback.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist && mkdir -p dist
+          APK="$(ls -1t app/build/outputs/apk/debug/*.apk | head -n1)"
+          # versionName from the manifest is what a phone shows; the run number
+          # keeps consecutive nightlies apart.
+          cp "$APK" "dist/diamond-engine-${GITHUB_RUN_NUMBER}.apk"
+          ls -l dist
+          echo "staged=$(ls dist/*.apk)" >> "$GITHUB_OUTPUT"
+        id: stage
+
       - name: Upload nightly APK
         uses: actions/upload-artifact@v7
         with:
-          name: diamond-nightly-${{ github.run_number }}
-          path: |
-            app/build/outputs/apk/debug/*.apk
-            app/src/main/cpp/third_party/luac/VERSION.txt
+          name: diamond-engine-apk
+          # Flat: the download lands as diamond-engine-<n>.apk, no subfolders.
+          path: dist/*.apk
           if-no-files-found: error
           retention-days: 30
+
+      # The one-click path: a release asset is a plain file download, unlike an
+      # artifact, which is always a zip.
+      - name: Publish nightly release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly-${{ github.run_number }}
+          name: Diamond Engine nightly ${{ github.run_number }}
+          body: |
+            Debug APK built from `${{ github.sha }}`.
+            Install with `adb install diamond-engine-${{ github.run_number }}.apk`.
+          files: dist/*.apk
+          prerelease: true
+          make_latest: false
 
       - name: Upload build logs
         if: always()

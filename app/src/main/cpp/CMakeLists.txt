@@ -274,8 +274,23 @@ endif()
 # The shared object has no translation unit of its own: it links the three
 # static halves plus the export map below. CMake needs at least one source, so
 # jni_anchor.cpp holds JNI_OnLoad/JNI_OnUnload only.
+#
+# All three static libraries are linked with --whole-archive. Without it the
+# linker only pulls in objects that the anchor defines a *reference* to, and
+# nothing references the JNI entry points: they are called by the Java VM
+# through dlsym(), so Java_com_diamond_engine_jni_NativeBridge_init() never
+# reaches the dynamic symbol table and the first System.loadLibrary() call dies
+# with UnsatisfiedLinkError. Verified by inspecting nm -D on a linked .so.
 add_library(engine SHARED
         ${DIAMOND_ROOT}/jni/jni_anchor.cpp)
+
+# Every static half this .so ships, in link order. The whole-archive wrapper
+# keeps all of their objects, so the JNI entry points (which nothing references
+# at link time) land in the dynamic symbol table.
+set(DIAMOND_STATIC_HALVES diamond_cxx diamond_c)
+if(DIAMOND_HAVE_LUAC)
+    list(APPEND DIAMOND_STATIC_HALVES diamond_luac)
+endif()
 
 set_target_properties(engine PROPERTIES
         OUTPUT_NAME engine
@@ -290,19 +305,20 @@ target_compile_options(engine PRIVATE
         -ffunction-sections
         -fdata-sections)
 
-target_link_libraries(engine
-        PRIVATE diamond_cxx
-        PRIVATE diamond_c
-        PRIVATE android
-        PRIVATE log
-        PRIVATE m
-        PRIVATE dl
-        PRIVATE EGL
-        PRIVATE GLESv3)
-
-if(DIAMOND_HAVE_LUAC)
-    target_link_libraries(engine PRIVATE diamond_luac)
-endif()
+# Order matters and plain flags are kept verbatim by CMake, so the whole-archive
+# bracket can live in the same call: the static halves come first (they are what
+# needs android/log/EGL), the platform import libraries after them. Wrapping
+# android/log/EGL themselves would be wrong — they are import stubs, not archives.
+target_link_libraries(engine PRIVATE
+        "-Wl,--whole-archive"
+        ${DIAMOND_STATIC_HALVES}
+        "-Wl,--no-whole-archive"
+        android
+        log
+        m
+        dl
+        EGL
+        GLESv3)
 
 if(DIAMOND_LINK_VULKAN)
     # libvulkan.so only exports the entry points; the loader does the rest.
@@ -312,11 +328,13 @@ endif()
 
 # 16 KiB page size — mandatory for Android 15+ devices with 16 KiB kernels,
 # harmless on 4 KiB systems.
+#
+# --gc-sections keeps the size down even with --whole-archive: an object is
+# pulled in, but sections that nothing reaches are still discarded.
 target_link_options(engine PRIVATE
         "-Wl,--version-script=${DIAMOND_ROOT}/libengine.map"
         "-Wl,-z,max-page-size=16384"
-        "-Wl,--gc-sections"
-        "-Wl,--exclude-libs,ALL")
+        "-Wl,--gc-sections")
 
 # -----------------------------------------------------------------------------
 #  Build report (printed into the CI log for every ABI)
