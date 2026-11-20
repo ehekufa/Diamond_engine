@@ -116,6 +116,10 @@ fallback if the newest toolchain fails. The APK is verified, then published two 
 
 Install with `adb install -r diamond-engine-<run>.apk`.
 
+The debug APK is ~5.7 MB for both ABIs. That number only became honest after the
+JNI export fix: the linker used to discard the bridge object, so earlier builds
+were smaller by exactly the code the app needed to start.
+
 `minSdk` is 21 while Vulkan only exists from API 24, so `libengine.so`
 never links `libvulkan.so`: the backend `dlopen()`s the loader and resolves its
 entry points with `dlsym()`, and reports the first missing one instead of

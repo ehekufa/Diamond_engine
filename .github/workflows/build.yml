@@ -383,9 +383,11 @@ jobs:
           # UnsatisfiedLinkError before the first screen. Compare the two.
           NM="${ANDROID_NDK_HOME:-$(ls -1d "${ANDROID_HOME}"/ndk/* | sort -V | tail -n1)}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
           JAVA="$(ls -1t app/build/intermediates/javac/debug/**/classes 2>/dev/null | head -n1)"
-          rm -rf verify-so && mkdir -p verify-so
-          unzip -o -q "$APK" 'lib/arm64-v8a/libengine.so' -d verify-so
-          SO=verify-so/lib/arm64-v8a/libengine.so
+          # Unpack outside the checkout: a stray verify-so/ would be picked up
+          # by the next static check as an untracked artifact.
+          rm -rf "$RUNNER_TEMP/verify-so" && mkdir -p "$RUNNER_TEMP/verify-so"
+          unzip -o -q "$APK" 'lib/arm64-v8a/libengine.so' -d "$RUNNER_TEMP/verify-so"
+          SO="$RUNNER_TEMP/verify-so/lib/arm64-v8a/libengine.so"
           if [ ! -f "$SO" ]; then
             echo "::error::libengine.so is not in the APK"
             exit 1
