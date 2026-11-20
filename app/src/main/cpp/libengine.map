@@ -1,0 +1,26 @@
+/* Diamond Engine — exported surface of libengine.so.
+ *
+ * Everything else is internal: the library is built with -fvisibility=hidden,
+ * so this map is both documentation and a guard — a symbol that is not listed
+ * here cannot leak into the ABI by accident. */
+DIAMOND_0.1 {
+    global:
+        /* JNI entry points (Java_com_diamond_engine_jni_NativeBridge_*) */
+        Java_*;
+        JNI_OnLoad;
+
+        /* Public engine ABI (diamond.h) */
+        diamond_*;
+        dengine_*;
+
+        /* Callbacks referenced by LuaC-compiled code (dlogic.h) */
+        engine_*;
+
+        /* Document and Vulkan probing helpers used by the tools/ scripts */
+        dformat_*;
+        dvulkan_*;
+        /* LuaC library API, when vendored LuaC is compiled in */
+        luac_*;
+    local:
+        *;
+};

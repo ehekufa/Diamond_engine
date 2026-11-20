@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Diamond Engine — editor layout.
+
+  The viewport fills the screen; controls sit in a single bottom bar so the 3D
+  view keeps as many pixels as possible on a 480x800 "potato" phone. The log
+  console is an overlay that starts hidden (toggled by the Log button).
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/editor_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/viewport_background">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal">
+
+    <FrameLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1">
+
+        <com.diamond.engine.view.ViewportView
+            android:id="@+id/viewport"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <TextView
+            android:id="@+id/log_console"
+            android:layout_width="match_parent"
+            android:layout_height="160dp"
+            android:layout_gravity="bottom"
+            android:background="@color/log_background"
+            android:fontFamily="monospace"
+            android:padding="8dp"
+            android:scrollbars="vertical"
+            android:textColor="@color/log_foreground"
+            android:textSize="10sp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/fatal_error"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:background="@color/log_background"
+            android:padding="16dp"
+            android:textColor="@color/log_foreground"
+            android:textSize="14sp"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <!-- Scene tree. Hidden in portrait (see res/layout-port) so the viewport
+         keeps the full width on small phones. -->
+    <ListView
+        android:id="@+id/scene_tree"
+        android:layout_width="220dp"
+        android:layout_height="match_parent"
+        android:background="@color/tree_background"
+        android:divider="@null"
+        android:dividerHeight="0dp"
+        android:scrollbars="vertical"
+        android:visibility="visible" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/status_line"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/bar_background"
+        android:fontFamily="monospace"
+        android:paddingStart="12dp"
+        android:paddingTop="4dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="4dp"
+        android:textColor="@color/bar_foreground"
+        android:textSize="11sp" />
+
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/bar_background"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:padding="4dp">
+
+            <Button
+                android:id="@+id/button_play"
+                style="@style/Widget.Diamond.ToolButton"
+                android:text="@string/action_play" />
+
+            <Button
+                android:id="@+id/button_add_cube"
+                style="@style/Widget.Diamond.ToolButton"
+                android:text="@string/action_add_cube" />
+
+            <Button
+                android:id="@+id/button_add_group"
+                style="@style/Widget.Diamond.ToolButton"
+                android:text="@string/action_add_group" />
+
+            <Button
+                android:id="@+id/button_delete"
+                style="@style/Widget.Diamond.ToolButton"
+                android:text="@string/action_delete" />
+
+            <Button
+                android:id="@+id/button_view_2d"
+                style="@style/Widget.Diamond.ToolButton"
+                android:text="@string/action_view_2d" />
+
+            <Button
+                android:id="@+id/button_view_3d"
+                style="@style/Widget.Diamond.ToolButton"
+                android:text="@string/action_view_3d" />
+
+            <Button
+                android:id="@+id/button_new"
+                style="@style/Widget.Diamond.ToolButton"
+                android:text="@string/action_new" />
+
+            <Button
+                android:id="@+id/button_save"
+                style="@style/Widget.Diamond.ToolButton"
+                android:text="@string/action_save" />
+
+            <Button
+                android:id="@+id/button_log"
+                style="@style/Widget.Diamond.ToolButton"
+                android:text="@string/action_log" />
+        </LinearLayout>
+    </HorizontalScrollView>
+
+</LinearLayout>
