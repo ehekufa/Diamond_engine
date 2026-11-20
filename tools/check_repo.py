@@ -31,6 +31,7 @@ CPP = ROOT / "app" / "src" / "main" / "cpp"
 JAVA = ROOT / "app" / "src" / "main" / "java"
 RES = ROOT / "app" / "src" / "main" / "res"
 MANIFEST = ROOT / "app" / "src" / "main" / "AndroidManifest.xml"
+APP_GRADLE = ROOT / "app" / "build.gradle"
 
 failures = []
 notes = []
@@ -154,14 +155,15 @@ def check_manifest(verbose):
         fail("manifest", f"package is '{package}', expected 'com.diamond.engine'")
     if root.find("application") is None:
         fail("manifest", "<application> element is missing")
-    uses_sdk = root.find("uses-sdk")
-    if uses_sdk is None:
-        fail("manifest", "<uses-sdk> is missing")
-    else:
-        if uses_sdk.get(android + "minSdkVersion") is None:
-            fail("manifest", "<uses-sdk> has no minSdkVersion")
-        if uses_sdk.get(android + "targetSdkVersion") is None:
-            fail("manifest", "<uses-sdk> has no targetSdkVersion")
+    # SDK levels are declared in app/build.gradle: AGP 9's manifest merger
+    # rejects a <uses-sdk> element in a main manifest, and a stale one there is
+    # silently ignored by AGP 8, so the build file is the only source of truth.
+    if root.find("uses-sdk") is not None:
+        fail("manifest", "<uses-sdk> must not be in the manifest; use app/build.gradle")
+    gradle = APP_GRADLE.read_text(encoding="utf-8", errors="replace") if APP_GRADLE.exists() else ""
+    for key, expected in (("minSdk", "21"), ("targetSdk", "36")):
+        if not re.search(rf"\b{key}\s*=?\s*{expected}\b", gradle):
+            fail("manifest", f"app/build.gradle does not set {key} = {expected}")
     if root.find("uses-feature[@android:glEsVersion]", {"android": android[1:-1]}) is None:
         # Not fatal, but the store uses it to filter devices.
         notes.append("manifest: no <uses-feature android:glEsVersion> declared")
