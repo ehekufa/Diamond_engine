@@ -114,11 +114,11 @@ android {
     }
 
     buildFeatures {
+        // Only the two features this project actually uses. AGP 9 removed the
+        // per-feature flags for aidl/renderscript/shaders (they are always off
+        // unless a source set uses them), so declaring them is now an error.
         buildConfig = true
         resValues = true
-        shaders = false
-        aidl = false
-        renderscript = false
     }
 
     lint {
