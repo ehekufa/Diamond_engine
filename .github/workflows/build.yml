@@ -334,6 +334,12 @@ jobs:
               | tr -d '\r' | head -n 4 | while IFS= read -r line; do
                   echo "::error title=${f}::${line:0:900}"
                 done
+            # javac/C++ diagnostics look like "path:line: error: ..." and are the
+            # only place the actual mistake is reported.
+            grep -E "^[^ ].*:( error| fatal error|error:)" "$f" | tr -d '\r' | head -n 8 \
+              | while IFS= read -r line; do
+                  echo "::error title=${f}::${line:0:900}"
+                done
           done
 
       # -----------------------------------------------------------------------
