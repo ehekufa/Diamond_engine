@@ -161,34 +161,87 @@ def check_manifest(verbose):
     if root.find("uses-feature[@android:glEsVersion]", {"android": android[1:-1]}) is None:
         # Not fatal, but the store uses it to filter devices.
         notes.append("manifest: no <uses-feature android:glEsVersion> declared")
+    # Every component named in the manifest must have a source file, otherwise
+    # the app installs and then crashes on launch.
+    android = "{http://schemas.android.com/apk/res/android}"
+    application = root.find("application")
+    if application is not None and JAVA.exists():
+        sources = {p.stem for p in JAVA.rglob("*.java")}
+        for component in application:
+            name = component.get(android + "name")
+            if not name:
+                continue
+            simple = name.rsplit(".", 1)[-1]
+            if simple not in sources:
+                fail("manifest", f"<{component.tag}> {name} has no Java source")
     if verbose:
         print(f"manifest: package={package or '?'}")
 
 
-def check_resources(verbose):
-    if not JAVA.exists():
-        return
-    declared = set()
+def collect_resources():
+    """Maps resource type -> set of names, the way AAPT sees res/."""
+    declared = {}
+    # Values files declare names by attribute, one type per element name.
     for values in RES.glob("values/*.xml"):
         try:
-            for element in ET.parse(values).getroot():
-                name = element.get("name")
-                if name:
-                    declared.add(name)
+            root = ET.parse(values).getroot()
         except ET.ParseError as error:
             fail("res", f"{values.relative_to(ROOT)} does not parse: {error}")
+            continue
+        for element in root:
+            name = element.get("name")
+            if name:
+                declared.setdefault(element.tag, set()).add(name)
+    # File-backed resources: the file stem is the resource name.
+    for path in RES.rglob("*"):
+        if not path.is_file() or path.parent.name.startswith("values"):
+            continue
+        kind = path.parent.name.split("-")[0]
+        declared.setdefault(kind, set()).add(path.stem)
+    # Layout ids become R.id.* entries, which Java refers to directly.
+    ids = set()
+    for path in RES.rglob("*.xml"):
+        if path.parent.name.startswith("values"):
+            continue
+        for value in re.findall(r'android:id\s*=\s*"@\+id/(\w+)"', path.read_text()):
+            ids.add(value)
+    if ids:
+        declared.setdefault("id", set()).update(ids)
+    return declared
+
+
+REFERENCE = re.compile(r"@(\+)?(\w+)/([\w.]+)")
+
+
+def check_resources(verbose):
+    declared = collect_resources()
     if not declared:
-        notes.append("res: no string resources declared yet")
+        notes.append("res: no resources declared yet")
         return
-    used = set()
-    for source in JAVA.rglob("*.java"):
-        text = source.read_text()
-        used |= set(re.findall(r"R\.string\.(\w+)", text))
-        used |= set(re.findall(r"getString\(R\.string\.(\w+)\)", text))
-    for name in sorted(used - declared):
-        fail("res", f"R.string.{name} is used but not declared")
+    scanned = [MANIFEST] if MANIFEST.exists() else []
+    scanned += [p for p in RES.rglob("*.xml") if not p.parent.name.startswith("values")]
+    missing = set()
+    for path in scanned:
+        for _plus, kind, name in REFERENCE.findall(path.read_text()):
+            if kind in ("android", "id"):
+                continue
+            if name not in declared.get(kind, set()):
+                missing.add(f"{path.relative_to(ROOT)} references @{kind}/{name}, "
+                            f"which is not declared")
+    for problem in sorted(missing):
+        fail("res", problem)
+
+    # Java code refers to R.<type>.<name>; same check, other direction.
+    if JAVA.exists():
+        used = set()
+        for source in JAVA.rglob("*.java"):
+            used |= set(re.findall(r"R\.(\w+)\.(\w+)", source.read_text()))
+        for kind, name in sorted(used):
+            if name not in declared.get(kind, set()):
+                fail("res", f"Java uses R.{kind}.{name}, which is not declared")
     if verbose:
-        print(f"res: {len(declared)} declared, {len(used)} used")
+        total = sum(len(names) for names in declared.values())
+        print(f"res: {total} resource(s) across {len(declared)} type(s)")
 
 
 def check_artifacts(verbose):
