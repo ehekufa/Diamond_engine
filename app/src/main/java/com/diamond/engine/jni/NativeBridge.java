@@ -18,15 +18,23 @@ package com.diamond.engine.jni;
  */
 public final class NativeBridge {
 
-    /** Status codes, mirrored from {@code diamond.h}. */
+    /**
+     * Status codes, mirrored from {@code DiamondStatus} in {@code diamond.h}.
+     *
+     * <p>{@code tools/check_repo.py} compares every one of these with the C enum,
+     * because a drift here is invisible at runtime: the engine returns 4 and Java
+     * reports it as something else entirely.
+     */
     public static final int OK = 0;
     public static final int ERR_ARG = 1;
-    public static final int ERR_MEMORY = 2;
-    public static final int ERR_IO = 3;
+    public static final int ERR_STATE = 2;
+    public static final int ERR_MEMORY = 3;
+    public static final int ERR_IO = 4;
     public static final int ERR_FORMAT = 5;
-    public static final int ERR_UNSUPPORTED = 6;
-    public static final int ERR_GPU = 7;
+    public static final int ERR_GPU = 6;
+    public static final int ERR_UNSUPPORTED = 7;
     public static final int ERR_PARSE = 8;
+    public static final int ERR_LOGIC = 9;
 
     /** Render backends, mirrored from {@code diamond.h}. */
     public static final int RENDER_GLES3 = 1;
@@ -34,10 +42,16 @@ public final class NativeBridge {
     public static final int RENDER_GLES2 = 3;
     public static final int RENDER_HYBRID = 4;
 
-    /** View modes. */
-    public static final int VIEW_2D = 1;
-    public static final int VIEW_25D = 2;
-    public static final int VIEW_3D = 3;
+    /**
+     * View modes, mirrored from {@code diamond.h}.
+     *
+     * <p>These must match {@code DiamondView} exactly: the native side rejects
+     * anything outside {@code [VIEW_2D, VIEW_3D]}, so an off-by-one here makes
+     * the corresponding button silently do nothing.
+     */
+    public static final int VIEW_2D = 0;
+    public static final int VIEW_25D = 1;
+    public static final int VIEW_3D = 2;
 
     /** Editor tools. */
     public static final int TOOL_SELECT = 0;
@@ -78,10 +92,16 @@ public final class NativeBridge {
     public static final int NODE_LIGHT = 3;
     public static final int NODE_CAMERA = 4;
 
-    /** Primitives. */
-    public static final int PRIM_CUBE = 0;
-    public static final int PRIM_PYRAMID = 1;
-    public static final int PRIM_QUAD = 2;
+    /**
+     * Primitives, mirrored from {@code DiamondPrimitive}.
+     *
+     * <p>Order matters: these are the engine's, not a convenient local order.
+     * Getting it wrong is silent — "Cube" used to add a quad because Java had
+     * the first two swapped.
+     */
+    public static final int PRIM_QUAD = 0;
+    public static final int PRIM_CUBE = 1;
+    public static final int PRIM_PYRAMID = 2;
     public static final int PRIM_GRID = 3;
 
     private NativeBridge() {
