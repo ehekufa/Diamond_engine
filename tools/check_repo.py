@@ -158,6 +158,37 @@ def check_jni_contract(verbose):
         print(f"jni: {len(exported)} exported, {len(declared)} declared")
 
 
+def check_enum_mirrors(verbose):
+    """Constants duplicated in Java must have the same values as the C enums.
+
+    NativeBridge mirrors diamond.h by hand. When the two drift, the native side
+    silently rejects the out-of-range value and the UI button does nothing —
+    which is exactly how VIEW_3D was broken (Java said 3, C accepts 0..2).
+    """
+    header = CPP / "include" / "diamond.h"
+    bridges = list(JAVA.rglob("NativeBridge.java"))
+    if not header.exists() or not bridges:
+        return
+    bridge = bridges[0]
+    c_text = header.read_text()
+    j_text = bridge.read_text()
+    checked = 0
+    # enum Foo { PREFIX_A = 0, ... }  ->  PREFIX_* constants
+    for block in re.findall(r"enum\s+Diamond\w+\s*\{(.*?)\}", c_text, re.S):
+        for name, value in re.findall(r"(DIAMOND_[A-Z0-9_]+)\s*=\s*(\d+)", block):
+            # Java spells them without the DIAMOND_ prefix.
+            java_name = name[len("DIAMOND_"):]
+            m = re.search(rf"public\s+static\s+final\s+int\s+{java_name}\s*=\s*(\d+)\s*;", j_text)
+            if not m:
+                continue
+            checked += 1
+            if m.group(1) != value:
+                fail("enums", f"NativeBridge.{java_name} = {m.group(1)}, "
+                              f"but {name} = {value} in diamond.h")
+    if verbose:
+        print(f"enums: {checked} mirrored constant(s) checked")
+
+
 def check_manifest(verbose):
     if not MANIFEST.exists():
         fail("manifest", "AndroidManifest.xml is missing")
@@ -371,6 +402,7 @@ def main():
     check_include_guards(args.verbose)
     check_extern_c(args.verbose)
     check_jni_contract(args.verbose)
+    check_enum_mirrors(args.verbose)
     check_manifest(args.verbose)
     check_resources(args.verbose)
     check_public_abi(args.verbose)
